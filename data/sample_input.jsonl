@@ -1,0 +1,4 @@
+{"question":"What is the role of WAEC?","answer":"WAEC conducts examinations and awards certificates across its member countries in West Africa.","category":"education","source":"sample","license":"example"}
+{"question":"How should a school protect student records?","answer":"Apply least-privilege access, encryption, audit logs, retention limits and anonymization before analytics or model training.","category":"operations","source":"sample","license":"example"}
+{"question":"What is formative assessment?","answer":"Formative assessment gathers evidence during learning so teachers can adapt instruction and learners can improve.","category":"education","source":"sample","license":"example"}
+
