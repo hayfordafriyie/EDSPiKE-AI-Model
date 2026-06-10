@@ -8,9 +8,10 @@ data/processed/*
 data/splits/*
 !data/**/.gitkeep
 checkpoints/*
-models/*
 reports/*
 !checkpoints/.gitkeep
-!models/.gitkeep
 !reports/.gitkeep
 
+# Model training outputs (not checked in)
+models/*/
+!models/edspike/
