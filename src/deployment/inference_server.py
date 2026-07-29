@@ -18,6 +18,8 @@ load_dotenv(Path(__file__).parents[2] / ".env")
 
 from .engine import InferenceEngine, create_engine
 from .prometheus_metrics import LATENCY, MODEL_READY, REQUESTS, THROUGHPUT, TOKENS
+from src.agents.orchestrator import multi_agent_generate
+from src.agents.worker import AGENT_PROFILES
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +29,13 @@ class GenerationRequest(BaseModel):
     max_tokens: int = Field(default=256, ge=1, le=2048)
     temperature: float = Field(default=0.7, ge=0, le=2)
     top_p: float = Field(default=0.95, gt=0, le=1)
+
+
+class AgentRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=20000)
+    max_worker_tokens: int = Field(default=512, ge=64, le=2048)
+    max_judge_tokens: int = Field(default=1024, ge=128, le=4096)
+    num_agents: int = Field(default=5, ge=2, le=10)
 
 
 class BatchRequest(BaseModel):
@@ -91,7 +100,7 @@ async def metrics_middleware(request: Request, call_next):
         return response
     finally:
         REQUESTS.labels(request.url.path, status).inc()
-        if request.url.path in {"/v1/generate", "/v1/generate-batch"}:
+        if request.url.path in {"/v1/generate", "/v1/generate-batch", "/v1/generate-agents"}:
             LATENCY.observe(time.perf_counter() - started)
 
 
@@ -148,4 +157,22 @@ def generate_batch(payload: BatchRequest, model: Annotated[InferenceEngine, Depe
         "latency_ms": elapsed * 1000, "throughput_tokens_per_second": throughput,
         "model": model.model_name,
     }
+
+
+@app.post("/v1/generate-agents", dependencies=[Depends(require_api_key)])
+def generate_agents(payload: AgentRequest, model: Annotated[InferenceEngine, Depends(engine)]):
+    started = time.perf_counter()
+    profiles = AGENT_PROFILES[:payload.num_agents]
+    result = multi_agent_generate(
+        generate_fn=model.generate_batch,
+        question=payload.prompt,
+        profiles=profiles,
+        max_worker_tokens=payload.max_worker_tokens,
+        max_judge_tokens=payload.max_judge_tokens,
+        max_workers=payload.num_agents,
+    )
+    elapsed = time.perf_counter() - started
+    result["latency_ms"] = elapsed * 1000
+    result["model"] = model.model_name
+    return result
 
