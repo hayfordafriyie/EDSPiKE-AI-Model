@@ -69,10 +69,13 @@ def multi_agent_generate(
     max_worker_tokens: int = 512,
     max_judge_tokens: int = 1024,
     max_workers: int = 5,
+    modality_context: str = "",
 ) -> dict[str, Any]:
     from .worker import run_workers
 
-    agent_answers = run_workers(generate_fn, question, profiles, max_worker_tokens, max_workers)
+    agent_answers = run_workers(
+        generate_fn, question, profiles, max_worker_tokens, max_workers, modality_context,
+    )
     verdict = judge(generate_fn, question, agent_answers, max_judge_tokens)
     return {
         "question": question,
@@ -81,4 +84,5 @@ def multi_agent_generate(
         "reasoning": verdict.get("reasoning", ""),
         "agent_answers": agent_answers,
         "num_agents": len(agent_answers),
+        "has_modality": bool(modality_context),
     }

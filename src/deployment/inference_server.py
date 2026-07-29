@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+import base64
 import hmac
 import logging
 import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -35,6 +36,9 @@ class GenerateRequest(BaseModel):
     num_agents: int = Field(default=5, ge=1, le=10)
     max_worker_tokens: int | None = Field(default=None, ge=64, le=2048)
     max_judge_tokens: int | None = Field(default=None, ge=128, le=4096)
+    images: list[str] | None = Field(default=None, description="Base64-encoded images or URLs")
+    audio: list[str] | None = Field(default=None, description="Base64-encoded audio files or URLs")
+    video: list[str] | None = Field(default=None, description="Base64-encoded video files or URLs")
 
     @field_validator("prompt")
     @classmethod
@@ -119,6 +123,42 @@ def run_generation(model: InferenceEngine, prompts: list[str], max_tokens: int, 
     return responses, counts, elapsed, throughput
 
 
+def _build_modality_context(payload: GenerateRequest) -> str:
+    context_parts: list[str] = []
+    if not any([payload.images, payload.audio, payload.video]):
+        return ""
+    try:
+        from src.modalities import describe_image, transcribe_audio, process_video
+    except ImportError:
+        logger.warning("modalities module not available")
+        return ""
+    if payload.images:
+        for i, img in enumerate(payload.images):
+            try:
+                raw = base64.b64decode(img)
+                desc = describe_image(raw)
+                context_parts.append(f"Image {i + 1}: {desc}")
+            except Exception:
+                logger.exception("Failed to process image %d", i)
+    if payload.audio:
+        for i, aud in enumerate(payload.audio):
+            try:
+                raw = base64.b64decode(aud)
+                text = transcribe_audio(raw)
+                context_parts.append(f"Audio {i + 1} transcription: {text}")
+            except Exception:
+                logger.exception("Failed to process audio %d", i)
+    if payload.video:
+        for i, vid in enumerate(payload.video):
+            try:
+                raw = base64.b64decode(vid)
+                analysis = process_video(raw)
+                context_parts.append(f"Video {i + 1}: {analysis}")
+            except Exception:
+                logger.exception("Failed to process video %d", i)
+    return "\n".join(context_parts)
+
+
 @app.get("/health")
 def health(request: Request):
     ready = getattr(request.app.state, "engine", None) is not None
@@ -138,8 +178,11 @@ def generate(payload: GenerateRequest, model: Annotated[InferenceEngine, Depends
     started = time.perf_counter()
     prompts = payload.prompts if payload.prompts else [payload.prompt]
     is_batch = payload.prompts is not None
+    modality_context = _build_modality_context(payload)
 
     if payload.num_agents <= 1:
+        if modality_context and prompts:
+            prompts = [f"{p}\n\n{modality_context}" for p in prompts]
         responses, counts, elapsed, throughput = run_generation(
             model, prompts, payload.max_tokens, payload.temperature, payload.top_p,
         )
@@ -164,6 +207,7 @@ def generate(payload: GenerateRequest, model: Annotated[InferenceEngine, Depends
             max_worker_tokens=payload.max_worker_tokens or payload.max_tokens,
             max_judge_tokens=payload.max_judge_tokens or payload.max_tokens * 2,
             max_workers=payload.num_agents,
+            modality_context=modality_context,
         )
         elapsed = time.perf_counter() - started
         result["latency_ms"] = elapsed * 1000

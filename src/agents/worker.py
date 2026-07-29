@@ -37,11 +37,29 @@ AGENT_PROFILES = [
         "temperature": 0.7,
         "top_p": 0.93,
     },
+    {
+        "name": "Visual",
+        "system": "You specialize in visual understanding. Analyze images, diagrams, and visual data to extract insights and patterns.",
+        "temperature": 0.4,
+        "top_p": 0.92,
+    },
+    {
+        "name": "Auditory",
+        "system": "You specialize in audio understanding. Process speech, sound patterns, and auditory information with precision.",
+        "temperature": 0.4,
+        "top_p": 0.92,
+    },
 ]
 
 
-def build_agent_prompt(profile: dict[str, Any], question: str) -> str:
-    return f"{profile['system']}\n\nQuestion: {question}\n\nAnswer:"
+def build_agent_prompt(
+    profile: dict[str, Any], question: str, modality_context: str = "",
+) -> str:
+    parts = [profile["system"]]
+    if modality_context:
+        parts.append(f"\nAdditional context from uploaded files:\n{modality_context}")
+    parts.append(f"\nQuestion: {question}\n\nAnswer:")
+    return "\n".join(parts)
 
 
 def generate_worker_answer(
@@ -49,8 +67,9 @@ def generate_worker_answer(
     profile: dict[str, Any],
     question: str,
     max_tokens: int = 512,
+    modality_context: str = "",
 ) -> dict[str, Any]:
-    prompt = build_agent_prompt(profile, question)
+    prompt = build_agent_prompt(profile, question, modality_context)
     responses, counts = generate_fn(
         [prompt],
         max_tokens=max_tokens,
@@ -71,13 +90,16 @@ def run_workers(
     profiles: list[dict[str, Any]] | None = None,
     max_tokens: int = 512,
     max_workers: int = 5,
+    modality_context: str = "",
 ) -> list[dict[str, Any]]:
     if profiles is None:
         profiles = AGENT_PROFILES
     results: list[dict[str, Any]] = []
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {
-            pool.submit(generate_worker_answer, generate_fn, p, question, max_tokens): p["name"]
+            pool.submit(
+                generate_worker_answer, generate_fn, p, question, max_tokens, modality_context,
+            ): p["name"]
             for p in profiles
         }
         for future in as_completed(futures):
