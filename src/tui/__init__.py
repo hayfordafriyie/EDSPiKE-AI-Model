@@ -33,7 +33,6 @@ def run_tui(working_dir: str = ".") -> None:
     except ImportError:
         _fallback_repl(working_dir)
         return
-
     _rich_tui(working_dir)
 
 
@@ -44,6 +43,8 @@ def _rich_tui(working_dir: str) -> None:
     from prompt_toolkit import PromptSession
     from prompt_toolkit.history import FileHistory
     from prompt_toolkit.styles import Style
+    from prompt_toolkit.keys import Keys
+    from prompt_toolkit.key_binding import KeyBindings
 
     console = Console()
     history_path = Path.home() / ".edspike_history"
@@ -53,6 +54,21 @@ def _rich_tui(working_dir: str) -> None:
     tracker = _get_mutation_tracker()
     tracker._base = Path(working_dir).resolve() if working_dir else Path(".").resolve()
     tracker.snapshot()
+
+    kb = KeyBindings()
+
+    @kb.add("tab")
+    def _tab_switch(event):
+        current = mode_mgr.get_current()
+        next_mode = "plan" if current.id == "build" else "build"
+        mode_mgr.set_mode(next_mode)
+        mode = mode_mgr.get_current()
+        color = {"build": "green", "plan": "yellow"}.get(mode.id, "cyan")
+        console.print(f"[{color}]Switched to {mode.name} mode[/{color}]")
+
+    @kb.add("c-c")
+    def _exit(event):
+        raise EOFError()
 
     try:
         from prompt_toolkit.completion import Completer, Completion
@@ -68,18 +84,12 @@ def _rich_tui(working_dir: str) -> None:
                 idx = text.rindex("@")
                 prefix = text[idx + 1:]
 
-                # Suggest subagents
-                agents = {
-                    "build": "Full-access development agent",
-                    "plan": "Read-only planning agent",
-                    "explore": "Fast code exploration agent",
-                    "general": "General-purpose agent",
-                }
-                for name, desc in agents.items():
+                from src.agents import list_agents
+                for a in list_agents():
+                    name = a["id"]
                     if name.startswith(prefix):
-                        yield Completion(f"@{name}", start_position=-len(prefix) - 1, display=f"@{name}", display_meta=desc)
+                        yield Completion(f"@{name}", start_position=-len(prefix) - 1, display=f"@{name}", display_meta=a.get("description", ""))
 
-                # Suggest files
                 root = Path(self.root_dir)
                 for fpath in root.rglob("*"):
                     if fpath.is_file() and fpath.name.startswith(prefix):
@@ -91,9 +101,10 @@ def _rich_tui(working_dir: str) -> None:
             history=FileHistory(str(history_path)),
             completer=completer,
             complete_while_typing=True,
+            key_bindings=kb,
         )
     except Exception:
-        psession = PromptSession()
+        psession = PromptSession(key_bindings=kb)
 
     style = Style.from_dict({
         "prompt": "ansicyan bold",
@@ -101,13 +112,14 @@ def _rich_tui(working_dir: str) -> None:
 
     console.print(Panel(
         "[bold cyan]EDSPiKE[/bold cyan] - AI Coding Assistant",
-        subtitle="[/bold]Type /help for commands, Ctrl+C to exit[/bold]",
+        subtitle="Type /help for commands, Tab to switch modes, Ctrl+C to exit",
         border_style="cyan",
     ))
 
     while True:
         mode = mode_mgr.get_current()
-        prompt_str = f"\033[36m[{mode.name}]\033[0m >>> "
+        color_code = {"build": "32", "plan": "33", "explore": "36", "general": "34"}.get(mode.id, "36")
+        prompt_str = f"\033[{color_code}m[{mode.name}]\033[0m >>> "
 
         try:
             text = psession.prompt(prompt_str, style=style)
@@ -179,6 +191,26 @@ def _handle_command(text: str, console: Any, mode_mgr: Any, tracker: Any, workin
                 new = c.new_hash[:8] if c.new_hash else ""
                 table.add_row(c.type.value, c.path, old, new)
             console.print(table)
+    elif cmd in ("/init",):
+        from src.cmd import run_command
+        rc = run_command("init", [working_dir])
+        if rc != 0:
+            console.print("[red]/init failed[/red]")
+    elif cmd in ("/connect",):
+        from src.cmd import run_command
+        rc = run_command("connect", [])
+        if rc != 0:
+            console.print("[red]/connect failed[/red]")
+    elif cmd in ("/share",):
+        from src.cmd import run_command
+        rc = run_command("share", args)
+        if rc != 0:
+            console.print("[red]/share failed[/red]")
+    elif cmd in ("/agent",) and args and args[0] == "create":
+        from src.cmd import run_command
+        rc = run_command("agent_create", args[1:])
+        if rc != 0:
+            console.print("[red]agent create failed[/red]")
     else:
         console.print(f"[red]Unknown command: {text}. Type /help for commands.[/red]")
 
@@ -188,28 +220,36 @@ def _process_prompt(text: str, console: Any, mode_mgr: Any, working_dir: str) ->
         from src.config import load_settings
         from src.providers import get_provider
 
+        # Check for image paths (drag-drop support)
+        extra_images = []
+        for word in text.split():
+            p = Path(word.strip("\"'"))
+            if p.exists() and p.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"):
+                extra_images.append(str(p))
+
         settings = load_settings()
         provider = get_provider(settings.providers.default_provider or "openai")
 
         if not provider:
-            console.print("[red]No provider configured.[/red]")
+            console.print("[red]No provider configured. Run /connect[/red]")
             return
 
         model = settings.providers.default_model or "gpt-4"
         mode = mode_mgr.get_current()
 
-        system_mode_hint = ""
-        if mode.id == "plan":
-            system_mode_hint = "You are in PLAN mode. Analyze and suggest changes but DO NOT modify any files."
-        elif mode.id == "explore":
-            system_mode_hint = "You are in EXPLORE mode. Search and read files only. Do not modify anything."
-
-        enhanced_prompt = text
-        if system_mode_hint:
-            enhanced_prompt = f"[{mode.name} mode]\n{system_mode_hint}\n\nUser: {text}"
+        system_hints = {
+            "plan": "You are in PLAN mode. Analyze and suggest changes but DO NOT modify any files.",
+            "explore": "You are in EXPLORE mode. Search and read files only. Do not modify anything.",
+        }
+        hint = system_hints.get(mode.id, "")
+        enhanced = text
+        if hint:
+            enhanced = f"[{mode.name} mode]\n{hint}\n\nUser: {text}"
+        if extra_images:
+            enhanced += "\n[Attached images: " + ", ".join(extra_images) + "]"
 
         with console.status("[cyan]Thinking...[/cyan]"):
-            response = provider.generate(enhanced_prompt, model=model)
+            response = provider.generate(enhanced, model=model)
 
         console.print(Markdown(response))
 
@@ -221,20 +261,22 @@ def _process_prompt(text: str, console: Any, mode_mgr: Any, working_dir: str) ->
 
 def _show_help(console: Any) -> None:
     from rich.table import Table
-
     table = Table(title="Commands")
     table.add_column("Command", style="cyan")
     table.add_column("Description")
-
     table.add_row("/help", "Show this help")
     table.add_row("/clear", "Clear screen")
     table.add_row("/exit", "Exit the TUI")
+    table.add_row("Tab", "Switch between Build and Plan mode")
     table.add_row("/build", "Switch to Build mode (full access)")
     table.add_row("/plan", "Switch to Plan mode (read-only)")
     table.add_row("/mode [name]", "Show or switch agent mode")
     table.add_row("/undo", "Undo last file change")
     table.add_row("/diff", "Show recent file changes")
-
+    table.add_row("/init", "Scan project and generate AGENTS.md")
+    table.add_row("/connect", "Set up an AI provider")
+    table.add_row("/share", "Create a shareable session link")
+    table.add_row("/agent create", "Create a new agent")
     console.print(table)
 
 
@@ -257,7 +299,7 @@ def _fallback_repl(working_dir: str) -> None:
         if text == "/exit" or text == "/quit":
             break
         elif text == "/help":
-            print("Commands: /help, /clear, /build, /plan, /mode, /undo, /diff, /exit, /quit")
+            print("Commands: /help, /clear, /build, /plan, /mode, /undo, /diff, /init, /connect, /share, /exit, /quit")
         elif text == "/build":
             mode_mgr.set_mode("build")
             print("Switched to Build mode")
