@@ -130,9 +130,6 @@ class ApprovalManager:
         return self._continue(session, results)
 
     def _continue(self, session: ApprovalSession, results: list[str]) -> dict[str, Any]:
-        if session.messages:
-            last = session.messages[-1] if session.messages else ""
-            session.messages.append(last)
         session.messages.extend(results)
         session.total_tokens += sum(len(r) for r in results)
 
