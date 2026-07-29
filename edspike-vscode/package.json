@@ -1,0 +1,30 @@
+{
+  "name": "edspike-ai",
+  "displayName": "EDSPiKE AI Agent",
+  "description": "AI coding assistant powered by EDSPiKE — multi-agent orchestration, ReAct tool-use, and continuous learning",
+  "version": "1.0.2",
+  "publisher": "edspike",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages", "Other"],
+  "activationEvents": [],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "edspike.ask", "title": "EDSPiKE: Ask a question" },
+      { "command": "edspike.explain", "title": "EDSPiKE: Explain selected code" },
+      { "command": "edspike.fix", "title": "EDSPiKE: Fix selected code" },
+      { "command": "edspike.chat", "title": "EDSPiKE: Open chat panel" }
+    ],
+    "keybindings": [
+      { "key": "ctrl+shift+i", "command": "edspike.ask" },
+      { "key": "ctrl+shift+e", "command": "edspike.explain", "when": "editorHasSelection" }
+    ],
+    "configuration": {
+      "title": "EDSPiKE",
+      "properties": {
+        "edspike.apiUrl": { "type": "string", "default": "http://localhost:8000", "description": "EDSPiKE API server URL" },
+        "edspike.apiKey": { "type": "string", "default": "", "description": "API key for authentication" }
+      }
+    }
+  }
+}
