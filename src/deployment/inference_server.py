@@ -232,16 +232,7 @@ def generate(payload: GenerateRequest, model: Annotated[InferenceEngine, Depends
                 _approval_manager._sessions[sid]
             )
             result["model"] = model.model_name
-    return result
-
-
-@app.post("/v1/approve", dependencies=[Depends(require_api_key)])
-def approve(payload: ApproveRequest):
-    decision = ApprovalDecision(payload.action)
-    result = _approval_manager.decide(payload.session_id, decision, payload.index)
-    if "error" in result:
-        raise HTTPException(status_code=400, detail=result["error"])
-    return result
+            return result
 
         loop = ReActLoop(
             generate_fn=model.generate_batch,
@@ -264,6 +255,15 @@ def approve(payload: ApproveRequest):
         return result
 
     modality_context = _build_modality_context(payload)
+
+
+@app.post("/v1/approve", dependencies=[Depends(require_api_key)])
+def approve(payload: ApproveRequest):
+    decision = ApprovalDecision(payload.action)
+    result = _approval_manager.decide(payload.session_id, decision, payload.index)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
 
     if payload.num_agents <= 1:
         if modality_context and prompts:
