@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hmac
+import json
 import logging
 import os
 import time
@@ -17,28 +18,17 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 load_dotenv(Path(__file__).parents[2] / ".env")
 
-from pydantic import RootModel
-
-
-class ApproveRequest(BaseModel):
-    session_id: str = Field(..., description="Session ID from /v1/generate")
-    action: str = Field(
-        ...,
-        pattern=r"^(approve_one|approve_all|reject)$",
-        description="'approve_one', 'approve_all', or 'reject'",
-    )
-    index: int | None = Field(default=None, description="Call index for approve_one / reject")
-
 from .engine import InferenceEngine, create_engine
 from .prometheus_metrics import LATENCY, MODEL_READY, REQUESTS, THROUGHPUT, TOKENS
 from src.agents.orchestrator import multi_agent_generate
 from src.agents.worker import AGENT_PROFILES
 from src.tools import ReActLoop, ToolExecutor
 from src.tools.permissions import ApprovalDecision, ApprovalManager
-
-_approval_manager = ApprovalManager()
+from src.providers import get_provider, SUPPORTED_PROVIDERS
 
 logger = logging.getLogger(__name__)
+
+_approval_manager = ApprovalManager()
 
 MAX_BATCH = int(os.getenv("MAX_BATCH_SIZE", "64"))
 
@@ -52,12 +42,15 @@ class GenerateRequest(BaseModel):
     num_agents: int = Field(default=5, ge=1, le=10)
     max_worker_tokens: int | None = Field(default=None, ge=64, le=2048)
     max_judge_tokens: int | None = Field(default=None, ge=128, le=4096)
-    images: list[str] | None = Field(default=None, description="Base64-encoded images or URLs")
-    audio: list[str] | None = Field(default=None, description="Base64-encoded audio files or URLs")
-    video: list[str] | None = Field(default=None, description="Base64-encoded video files or URLs")
-    use_tools: bool = Field(default=False, description="Enable tool-use (ReAct) mode for file ops, bash, etc.")
-    approval_mode: str = Field(default="auto", description="Tool approval: 'auto' (no approval), 'manual' (ask before each tool call)")
-    workspace_root: str | None = Field(default=None, description="Root directory for tool operations")
+    images: list[str] | None = Field(default=None)
+    audio: list[str] | None = Field(default=None)
+    video: list[str] | None = Field(default=None)
+    use_tools: bool = Field(default=False)
+    approval_mode: str = Field(default="auto")
+    workspace_root: str | None = Field(default=None)
+    provider: str = Field(default="local")
+    api_key: str | None = Field(default=None)
+    model: str | None = Field(default=None)
 
     @field_validator("prompt")
     @classmethod
@@ -73,6 +66,12 @@ class GenerateRequest(BaseModel):
             if any(not p.strip() or len(p) > 20000 for p in value):
                 raise ValueError("each prompt must contain 1 to 20,000 characters")
         return value
+
+
+class ApproveRequest(BaseModel):
+    session_id: str = Field(...)
+    action: str = Field(..., pattern=r"^(approve_one|approve_all|reject)$")
+    index: int | None = Field(default=None)
 
 
 def require_api_key(authorization: Annotated[str | None, Header()] = None) -> None:
@@ -131,9 +130,9 @@ def engine(request: Request) -> InferenceEngine:
     return eng
 
 
-def run_generation(model: InferenceEngine, prompts: list[str], max_tokens: int, temperature: float, top_p: float):
+def _run_generation(gen_fn: callable, prompts: list[str], max_tokens: int, temperature: float, top_p: float):
     started = time.perf_counter()
-    responses, counts = model.generate_batch(prompts, max_tokens, temperature, top_p)
+    responses, counts = gen_fn(prompts, max_tokens, temperature, top_p)
     elapsed = time.perf_counter() - started
     total = sum(counts)
     throughput = total / elapsed if elapsed else 0
@@ -181,6 +180,19 @@ def _build_modality_context(payload: GenerateRequest) -> str:
     return "\n".join(context_parts)
 
 
+def _resolve_gen_fn(payload: GenerateRequest, local_engine: InferenceEngine | None):
+    if payload.provider == "local":
+        if local_engine is None:
+            raise HTTPException(status_code=503, detail="Local model is not loaded")
+        return local_engine.generate_batch, getattr(local_engine, "model_name", "local")
+    prov = get_provider(
+        provider=payload.provider,
+        api_key=payload.api_key or os.getenv(f"{payload.provider.upper()}_API_KEY"),
+        model=payload.model,
+    )
+    return prov.generate_batch, prov.model_name
+
+
 @app.get("/health")
 def health(request: Request):
     ready = getattr(request.app.state, "engine", None) is not None
@@ -196,65 +208,78 @@ def metrics():
 
 
 @app.post("/v1/generate", dependencies=[Depends(require_api_key)])
-def generate(payload: GenerateRequest, model: Annotated[InferenceEngine, Depends(engine)]):
+def generate(payload: GenerateRequest, local_engine: Annotated[InferenceEngine | None, Depends(engine)] = None):
     started = time.perf_counter()
     prompts = payload.prompts if payload.prompts else [payload.prompt]
     is_batch = payload.prompts is not None
+
+    gen_fn, model_name = _resolve_gen_fn(payload, local_engine)
 
     if payload.use_tools and not is_batch and payload.prompt:
         exec_roots = [payload.workspace_root] if payload.workspace_root else None
         executor = ToolExecutor(allowed_roots=exec_roots)
 
         if payload.approval_mode == "manual":
-            from src.tools.registry import get_tool_schemas
-            schemas = get_tool_schemas()
-            descs = "\n\n".join(
-                f"### {s['name']}\n{s['description']}\nJSON Schema: {json.dumps(s['parameters'])}"
-                for s in schemas
-            )
+            schemas = json.dumps([{
+                "name": t.name, "description": t.description, "parameters": t.parameters,
+            } for t in __import__("src.tools.registry", fromlist=[""]).BUILTIN_TOOLS])
             system = (
                 f"You are an AI coding agent with access to tools.\n\n"
-                f"## Available Tools\n{descs}\n\n"
+                f"## Available Tools\n{schemas}\n\n"
                 f"## How to use tools\n"
-                f"When you need to use a tool, output:\n"
                 f'<tool_call>\n{{"name": "tool_name", "arguments": {{...}}}}\n</tool_call>\n\n'
                 f"Workspace: {payload.workspace_root or '.'}\n\nBegin."
             )
             messages = [system, f"## Task\n{payload.prompt}"]
             sid = _approval_manager.create_session(
-                generate_fn=model.generate_batch,
-                executor=executor,
-                messages=messages,
-                max_tokens=payload.max_tokens * 4,
-                temperature=payload.temperature,
+                generate_fn=gen_fn, executor=executor, messages=messages,
+                max_tokens=payload.max_tokens * 4, temperature=payload.temperature,
             )
-            result = _approval_manager._run_next_turn(
-                _approval_manager._sessions[sid]
-            )
-            result["model"] = model.model_name
+            result = _approval_manager._run_next_turn(_approval_manager._sessions[sid])
+            result["model"] = model_name
+            result["provider"] = payload.provider
             return result
 
-        loop = ReActLoop(
-            generate_fn=model.generate_batch,
-            executor=executor,
-            workspace=payload.workspace_root or ".",
-        )
+        loop = ReActLoop(generate_fn=gen_fn, executor=executor, workspace=payload.workspace_root or ".")
         react_result = loop.run(
-            question=payload.prompt,
-            max_tokens=payload.max_tokens * 4,
-            temperature=payload.temperature,
+            question=payload.prompt, max_tokens=payload.max_tokens * 4, temperature=payload.temperature,
         )
-        result = {
+        return {
             "response": react_result.final_answer,
             "tokens_generated": react_result.total_tokens,
             "latency_ms": (time.perf_counter() - started) * 1000,
-            "model": model.model_name,
-            "mode": "tool_react",
-            "turns": len(react_result.turns),
+            "model": model_name, "provider": payload.provider,
+            "mode": "tool_react", "turns": len(react_result.turns),
         }
-        return result
 
     modality_context = _build_modality_context(payload)
+
+    if payload.num_agents <= 1:
+        if modality_context and prompts:
+            prompts = [f"{p}\n\n{modality_context}" for p in prompts]
+        responses, counts, elapsed, throughput = _run_generation(gen_fn, prompts, payload.max_tokens, payload.temperature, payload.top_p)
+        result = {
+            "latency_ms": elapsed * 1000, "throughput_tokens_per_second": throughput,
+            "model": model_name, "provider": payload.provider,
+        }
+        if is_batch:
+            result["responses"] = responses
+            result["tokens_generated"] = sum(counts)
+        else:
+            result["response"] = responses[0]
+            result["tokens_generated"] = counts[0]
+    else:
+        result = multi_agent_generate(
+            generate_fn=gen_fn, question=payload.prompt or prompts[0],
+            profiles=AGENT_PROFILES[:payload.num_agents],
+            max_worker_tokens=payload.max_worker_tokens or payload.max_tokens,
+            max_judge_tokens=payload.max_judge_tokens or payload.max_tokens * 2,
+            max_workers=payload.num_agents, modality_context=modality_context,
+        )
+        result["latency_ms"] = (time.perf_counter() - started) * 1000
+        result["model"] = model_name
+        result["provider"] = payload.provider
+    return result
 
 
 @app.post("/v1/approve", dependencies=[Depends(require_api_key)])
@@ -263,38 +288,4 @@ def approve(payload: ApproveRequest):
     result = _approval_manager.decide(payload.session_id, decision, payload.index)
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
-    return result
-
-    if payload.num_agents <= 1:
-        if modality_context and prompts:
-            prompts = [f"{p}\n\n{modality_context}" for p in prompts]
-        responses, counts, elapsed, throughput = run_generation(
-            model, prompts, payload.max_tokens, payload.temperature, payload.top_p,
-        )
-        if is_batch:
-            result = {
-                "responses": responses, "tokens_generated": sum(counts),
-                "latency_ms": elapsed * 1000, "throughput_tokens_per_second": throughput,
-                "model": model.model_name,
-            }
-        else:
-            result = {
-                "response": responses[0], "tokens_generated": counts[0],
-                "latency_ms": elapsed * 1000, "throughput_tokens_per_second": throughput,
-                "model": model.model_name,
-            }
-    else:
-        profiles = AGENT_PROFILES[:payload.num_agents]
-        result = multi_agent_generate(
-            generate_fn=model.generate_batch,
-            question=payload.prompt or prompts[0],
-            profiles=profiles,
-            max_worker_tokens=payload.max_worker_tokens or payload.max_tokens,
-            max_judge_tokens=payload.max_judge_tokens or payload.max_tokens * 2,
-            max_workers=payload.num_agents,
-            modality_context=modality_context,
-        )
-        elapsed = time.perf_counter() - started
-        result["latency_ms"] = elapsed * 1000
-        result["model"] = model.model_name
     return result
