@@ -14,12 +14,12 @@ class Skill:
     type: str = "standard"  # standard, flow
     source: str = ""  # builtin, user, project
     flow_definition: str = ""  # mermaid/d2 for flow skills
+
     requires_bins: list[str] = field(default_factory=list)
     requires_config: list[str] = field(default_factory=list)
     install_instructions: str = ""
     emoji: str = ""
     lazy_load: bool = True  # only load when description matches intent
-
 
 class SkillManager:
     def __init__(self):
@@ -82,6 +82,7 @@ class SkillManager:
             lines.append(f"  - {skill.name}: {skill.description} ({skill.type})")
         return "\n".join(lines)
 
+
     def match_and_load(self, user_input: str) -> list[Skill]:
         q = user_input.lower()
         matched: list[Skill] = []
@@ -129,3 +130,4 @@ class SkillManager:
             requires_bins=[b.strip() for b in requires_bins_str.split(",") if b.strip()] if requires_bins_str else [],
             install_instructions=install_instructions,
         )
+
