@@ -36,9 +36,10 @@ class EvaluationMetrics:
         return math.exp(min(loss, 20))
 
     @staticmethod
-    def education_specific(predictions: list[str]) -> dict[str, float]:
-        terms = {"waec", "ges", "curriculum", "assessment", "learning outcome"}
-        aligned = sum(any(term in pred.lower() for term in terms) for pred in predictions)
+    def domain_specific(predictions: list[str]) -> dict[str, float]:
+        relevant_terms = {"policy", "procedure", "guideline", "regulation", "compliance",
+                          "workflow", "process", "service", "product", "sla"}
+        relevant = sum(any(term in pred.lower() for term in relevant_terms) for pred in predictions)
         code = [pred for pred in predictions if "def " in pred or "class " in pred]
         valid = 0
         for value in code:
@@ -48,7 +49,7 @@ class EvaluationMetrics:
             except SyntaxError:
                 pass
         return {
-            "curriculum_alignment": aligned / len(predictions) if predictions else 0.0,
+            "domain_relevance": relevant / len(predictions) if predictions else 0.0,
             "code_syntax_accuracy": valid / len(code) if code else 0.0,
         }
 

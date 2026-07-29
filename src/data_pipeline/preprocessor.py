@@ -19,7 +19,7 @@ class DataPreprocessor:
     def process_record(self, record: dict[str, Any]) -> dict[str, Any] | None:
         if "question" in record and "answer" in record:
             instruction, output = record["question"], record["answer"]
-            category = record.get("category", "education")
+            category = record.get("category", "general")
             context = record.get("context", "")
         elif "description" in record and "code" in record:
             language = record.get("language", "python")
@@ -32,8 +32,8 @@ class DataPreprocessor:
             ]
             instruction, output, context, category = "Continue this conversation.", "\n".join(turns), "", "conversation"
         elif "text" in record:
-            instruction = "Explain the following educational material."
-            output, context, category = record["text"], "", record.get("category", "education")
+            instruction = "Explain the following material."
+            output, context, category = record["text"], "", record.get("category", "general")
         else:
             return None
         result = {

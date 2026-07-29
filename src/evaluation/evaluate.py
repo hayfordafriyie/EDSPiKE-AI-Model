@@ -17,7 +17,7 @@ def evaluate_predictions(predictions_file: str, test_file: str, output: str) -> 
         "examples": len(predictions),
         "exact_match": EvaluationMetrics.exact_match(predictions, references),
         "token_f1": EvaluationMetrics.token_f1(predictions, references),
-        **EvaluationMetrics.education_specific(predictions),
+        **EvaluationMetrics.domain_specific(predictions),
     }
     target = Path(output)
     target.parent.mkdir(parents=True, exist_ok=True)

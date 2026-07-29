@@ -76,7 +76,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="EDSPiKE AI Model API",
     version="1.0.0",
-    description="Authenticated educational inference API",
+    description="Authenticated business-domain inference API with continuous learning",
     lifespan=lifespan,
 )
 

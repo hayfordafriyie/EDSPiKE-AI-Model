@@ -19,7 +19,7 @@ def test_health_and_generation():
         assert client.get("/health").status_code == 503
         app.state.engine = FakeEngine()
         assert client.get("/health").json()["status"] == "ready"
-        response = client.post("/v1/generate", json={"prompt": "What is WAEC?"})
+        response = client.post("/v1/generate", json={"prompt": "What is our return policy?"})
         assert response.status_code == 200
         assert response.json()["model"] == "test-model"
 

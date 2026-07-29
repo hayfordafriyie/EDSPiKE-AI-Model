@@ -19,7 +19,7 @@ def main() -> None:
             started = time.perf_counter()
             response = client.post(
                 f"{args.url}/v1/generate-batch", headers=headers,
-                json={"prompts": ["Explain WAEC in Ghana."] * args.batch_size, "max_tokens": 128},
+                json={"prompts": ["Summarize our business policy."] * args.batch_size, "max_tokens": 128},
             )
             response.raise_for_status()
             elapsed = time.perf_counter() - started

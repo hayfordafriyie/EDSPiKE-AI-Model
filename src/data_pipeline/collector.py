@@ -10,8 +10,8 @@ from typing import Any, Iterable
 logger = logging.getLogger(__name__)
 
 SENSITIVE_KEYS = {
-    "student_id", "admission_number", "email", "phone", "guardian_phone",
-    "first_name", "last_name", "full_name", "address",
+    "email", "phone", "first_name", "last_name", "full_name", "address",
+    "employee_id", "customer_id", "national_id", "passport", "ssn",
 }
 
 
@@ -45,7 +45,7 @@ class DataCollector:
         for key, value in record.items():
             normalized = key.lower()
             if normalized in SENSITIVE_KEYS:
-                if normalized.endswith("_id") or normalized == "admission_number":
+                if normalized in {"employee_id", "customer_id", "national_id"} or normalized.endswith("_id"):
                     result[key] = self._hash(str(value))
                 continue
             result[key] = value

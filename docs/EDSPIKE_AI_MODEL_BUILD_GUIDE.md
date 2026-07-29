@@ -1,7 +1,7 @@
 # EDSPiKE AI Model: Building from Scratch (Industry Standard)
 
 **Status:** Production Playbook  
-**Target:** Custom LLM for Educational Management & School Operations  
+**Target:** Custom LLM for any Business Domain — Continuous Learning from Your Data  
 **Scope:** Phase 1 MVP → Phase 2 Production  
 
 ---
@@ -21,17 +21,18 @@
 ## Executive Overview
 
 ### What We're Building
-A specialized transformer-based language model (7B-13B parameters) trained on:
-- Educational domain data (curriculum, assessments, school operations)
-- Ghana-specific context (local education system, WAEC standards, GES policies)
-- Code generation for EdTech workflows
-- Natural language understanding for school admin queries
+A domain-agnostic transformer-based language model (7B-13B parameters) trained on:
+- Your business data (policies, procedures, customer interactions, operations)
+- Domain-specific context (industry standards, regulations, internal workflows)
+- Code generation for business automation
+- Natural language understanding for business queries
+- The model improves continuously as your data grows
 
 ### Why Custom Instead of Fine-tune?
 - **Control:** Full ownership of training data, architecture, inference
-- **Cost:** Single API call → revenue opportunity vs API dependency
+- **Growth:** Model improves as your business data grows — no vendor lock-in
 - **Latency:** Sub-100ms inference on your infrastructure
-- **Privacy:** No data leaves EDSPiKE servers
+- **Privacy:** No data leaves your servers
 - **Scale:** Unlimited concurrent users without rate limits
 
 ### Timeline & Resource Estimate
@@ -174,31 +175,31 @@ compute:
 
 ### 2.1 Data Sources Strategy
 
-For EDSPiKE, aggregate from:
+For your business, aggregate from:
 
-1. **Educational Content (40%)**
-   - Ghana Education Service (GES) curriculum documents
-   - WAEC exam papers & marking schemes (2010-2024)
-   - School textbooks (digitized)
-   - University CS/IT programs (local context)
+1. **Business Content (40%)**
+   - Internal policies, procedures, and guidelines
+   - Product documentation and specifications
+   - Industry regulations and compliance documents
+   - Historical support tickets and resolutions
 
 2. **Operational Data (30%)**
-   - Anonymized student records (grades, attendance patterns)
-   - Timetable generation rules & constraints
-   - Fee payment workflows & edge cases
-   - Parent-teacher communication templates
+   - Anonymized customer interactions
+   - Workflow definitions and business rules
+   - Transaction records (aggregated, no PII)
+   - Communication templates and playbooks
 
 3. **Code & Technical (20%)**
-   - EdTech API documentation
-   - School management workflows (documented)
-   - Common SQL queries for reporting
-   - React component patterns (if UI generation in scope)
+   - Internal API documentation
+   - Business automation workflows
+   - Common SQL/reporting queries
+   - Configuration and integration patterns
 
 4. **External Quality Data (10%)**
-   - High-quality Wikipedia education sections
-   - Academic papers on pedagogy
-   - Kaggle education datasets
-   - Open educational resources (OER)
+   - High-quality Wikipedia articles on your domain
+   - Industry publications and standards
+   - Public datasets relevant to your sector
+   - Open educational resources
 
 ### 2.2 Data Collection & Preprocessing
 
@@ -215,39 +216,38 @@ import logging
 logger = logging.getLogger(__name__)
 
 class DataCollector:
-    """Centralized data collection from multiple sources"""
+    """Centralized data collection from multiple business sources"""
     
     def __init__(self, raw_data_dir: str = "data/raw"):
         self.raw_dir = Path(raw_data_dir)
         self.raw_dir.mkdir(parents=True, exist_ok=True)
     
-    def collect_ges_curriculum(self, source_path: str) -> List[Dict]:
-        """Parse GES curriculum PDFs or documents"""
+    def collect_policies(self, source_path: str) -> List[Dict]:
+        """Parse business policy documents"""
         documents = []
-        # Implementation: PDF extraction, text cleaning
-        logger.info(f"Collected {len(documents)} GES curriculum documents")
+        # Implementation: document parsing, text extraction
+        logger.info(f"Collected {len(documents)} policy documents")
         return documents
     
-    def collect_waec_papers(self, source_dir: str) -> List[Dict]:
-        """Aggregate WAEC exam papers with solutions"""
-        papers = []
-        for year in range(2010, 2025):
-            # Fetch papers → parse questions + answers
-            pass
-        logger.info(f"Collected {len(papers)} WAEC papers")
-        return papers
+    def collect_knowledge_base(self, source_dir: str) -> List[Dict]:
+        """Aggregate knowledge base articles"""
+        articles = []
+        for file in Path(source_dir).glob("*.md"):
+            articles.append({"text": file.read_text(), "source": file.name})
+        logger.info(f"Collected {len(articles)} knowledge base articles")
+        return articles
     
-    def collect_school_operations(self, db_connection) -> List[Dict]:
-        """Extract anonymized operational data from EDSPiKE"""
+    def collect_operations(self, db_connection) -> List[Dict]:
+        """Extract anonymized operational data"""
         queries = {
-            "timetables": "SELECT * FROM timetables LIMIT 10000",
-            "gradebooks": "SELECT class, subject, avg_score FROM grades GROUP BY class, subject",
-            "attendance_patterns": "SELECT * FROM attendance LIMIT 20000",
+            "workflows": "SELECT * FROM workflows LIMIT 10000",
+            "metrics": "SELECT department, metric, avg_value FROM metrics GROUP BY department, metric",
+            "interactions": "SELECT * FROM interactions LIMIT 20000",
         }
         data = {}
         for key, query in queries.items():
             data[key] = pd.read_sql(query, db_connection).to_dict('records')
-        logger.info(f"Collected school operations data: {len(data)} datasets")
+        logger.info(f"Collected operations data: {len(data)} datasets")
         return data
     
     def save_raw_data(self, data: List[Dict], name: str):
@@ -279,7 +279,7 @@ class DataPreprocessor:
             "instruction": question,
             "input": context,
             "output": answer,
-            "category": "education"
+            "category": "general"
         }
     
     @staticmethod
@@ -655,8 +655,8 @@ class EvaluationMetrics:
         return matches / len(predictions)
     
     @staticmethod
-    def education_specific_metrics(predictions: List[str], references: List[str]) -> Dict:
-        """Custom metrics for EDSPiKE"""
+    def domain_specific_metrics(predictions: List[str], references: List[str]) -> Dict:
+        """Custom metrics for business domain relevance"""
         
         metrics = {}
         
@@ -664,7 +664,6 @@ class EvaluationMetrics:
         correct_code = 0
         for pred, ref in zip(predictions, references):
             if pred.startswith("def ") or pred.startswith("class "):
-                # Try to parse & validate syntax
                 try:
                     compile(pred, '<string>', 'exec')
                     correct_code += 1
@@ -672,13 +671,13 @@ class EvaluationMetrics:
                     pass
         metrics['code_correctness'] = correct_code / len(predictions) if predictions else 0
         
-        # 2. Curriculum alignment (keyword matching)
-        curriculum_keywords = {'WAEC', 'GES', 'assessment', 'learning outcomes'}
-        aligned = sum(
+        # 2. Domain relevance (keyword matching)
+        domain_keywords = {'policy', 'procedure', 'workflow', 'compliance', 'sla'}
+        relevant = sum(
             1 for pred in predictions
-            if any(kw.lower() in pred.lower() for kw in curriculum_keywords)
+            if any(kw.lower() in pred.lower() for kw in domain_keywords)
         )
-        metrics['curriculum_alignment'] = aligned / len(predictions) if predictions else 0
+        metrics['domain_relevance'] = relevant / len(predictions) if predictions else 0
         
         return metrics
 ```
@@ -737,7 +736,7 @@ class ModelEvaluator:
         metrics = {
             "rouge": EvaluationMetrics.rouge_score(predictions, references),
             "exact_match": EvaluationMetrics.exact_match(predictions, references),
-            "education_specific": EvaluationMetrics.education_specific_metrics(predictions, references)
+            "domain_specific": EvaluationMetrics.domain_specific_metrics(predictions, references)
         }
         
         # Log results
@@ -827,9 +826,9 @@ model = AutoGPTQForCausalLM.from_pretrained(
 
 # Calibrate on representative data
 calibration_texts = [
-    "What is WAEC examination?",
-    "Create a school timetable",
-    "Ghana Education Service curriculum",
+    "What is our return policy?",
+    "Create a client onboarding workflow",
+    "Summarize the compliance requirements",
     # Add 100+ more examples
 ]
 
@@ -939,7 +938,7 @@ engine = EDSPiKEInferenceEngine()
 # Test throughput with realistic batch size
 import time
 test_prompts = [
-    "What is WAEC?" * 2 for _ in range(32)  # 32 concurrent requests
+    "What is our return policy?" * 2 for _ in range(32)  # 32 concurrent requests
 ]
 
 start = time.time()
@@ -1358,7 +1357,7 @@ async def root():
 # Single prompt
 curl -X POST http://localhost:8000/generate \
   -H "Content-Type: application/json" \
-  -d '{"prompt": "What is WAEC?", "max_tokens": 512}'
+  -d '{"prompt": "Summarize our business policy.", "max_tokens": 512}'
 
 # Batch (300+ tok/s)
 curl -X POST http://localhost:8000/generate_batch \
@@ -1501,7 +1500,7 @@ API_URL = "http://localhost:8000"
 
 # Test batch throughput
 test_prompts = [
-    "What is WAEC?" for _ in range(64)  # 64 concurrent requests
+    "What is our return policy?" for _ in range(64)
 ]
 
 latencies = []
@@ -1541,7 +1540,7 @@ class EDSPiKELoadTest(HttpUser):
     
     @task(3)
     def batch_generate(self):
-        prompts = ["Explain WAEC" for _ in range(32)]
+        prompts = ["Explain our return policy" for _ in range(32)]
         self.client.post("/generate_batch", json={"prompts": prompts})
     
     @task(1)
@@ -1789,7 +1788,7 @@ Week 14:      Production launch & monitoring
 - [ ] ROUGE-1 > 0.60
 - [ ] Exact match > 35% on Q&A subset
 - [ ] Code generation accuracy > 60%
-- [ ] Curriculum alignment score > 0.75
+- [ ] Domain relevance score > 0.75
 
 **Performance (★ NEW: Optimization Focus)**
 - [ ] **Throughput: 300+ tokens/second** (batch size 32-64)
@@ -1841,7 +1840,7 @@ docker run --gpus all -p 8000:8000 edspike-api:v1
 python -c "
 from src.deployment.inference_server import EDSPiKEInferenceServer
 engine = EDSPiKEInferenceServer()
-prompts = ['What is WAEC?'] * 64
+prompts = ['What is our return policy?'] * 64
 responses, tokens, latency, throughput = engine.generate_batch(prompts)
 print(f'Throughput: {throughput:.1f} tok/s')
 "

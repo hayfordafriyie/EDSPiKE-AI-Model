@@ -1,23 +1,26 @@
-# EDSPiKE AI Model
+# EDSPiKE AI Model — Business AI Platform
 
-Production-oriented data, training, evaluation, optimization and inference code for an
-EDSPiKE educational language model. The repository is runnable without model weights;
-GPU training and production inference require separately licensed datasets, a base model
-and suitable NVIDIA hardware.
+Production-grade data pipeline, training, evaluation, optimization and inference stack for
+building domain-agnostic language models that **learn continuously from your business data**.
+Any organization can plug in their data and get an AI assistant that grows smarter over time.
+
+The repository works without model weights; GPU training and production inference require
+datasets, a base model and suitable NVIDIA hardware.
 
 ## What is included
 
-- Privacy-first data collector with deterministic pseudonymization
-- JSON/JSONL/CSV/text ingestion, normalization, filtering and deduplication
-- Stratified deterministic train/validation/test splitting
-- Custom BPE tokenizer workflow
-- Llama-style from-scratch architecture and pretrained-model training paths
-- Reproducible Hugging Face Trainer workflow
-- Exact-match, token-F1, curriculum-alignment and code-syntax evaluation
-- AWQ quantization command
-- Lazy Transformers and vLLM inference backends
-- Authenticated FastAPI endpoints, input limits, health and Prometheus metrics
-- GPU container, Compose deployment, benchmark script and automated tests
+- **Privacy-first data collector** with deterministic pseudonymization (JSON/JSONL/CSV/TXT/MD)
+- **Data ingestion pipeline** — normalization, filtering, deduplication, stratified splitting
+- **Custom BPE tokenizer** workflow
+- **Llama-style** from-scratch architecture and pretrained-model training paths
+- **Reproducible Hugging Face Trainer** workflow
+- **Evaluation** — exact-match, token-F1, readability, business-domain relevance, code syntax
+- **AWQ 4-bit quantization** for deployment
+- **Dual inference backends** — Transformers (dev/CPU) and vLLM (production GPU)
+- **FastAPI server** with auth, rate limits, Prometheus metrics, batch generation
+- **Continuous learning loop** — collect feedback, store interactions, trigger retraining
+- **Docker Compose** deployment with Prometheus monitoring
+- **Benchmark script** and **automated tests**
 
 Model weights and copyrighted training material are intentionally excluded.
 
@@ -39,8 +42,8 @@ python -m src.data_pipeline.cli process
 python -m src.data_pipeline.cli split
 ```
 
-The three-record sample demonstrates formats but is too small for meaningful training.
-Replace it with licensed, quality-reviewed data.
+The sample demonstrates data formats but is too small for meaningful training.
+Replace it with your licensed, quality-reviewed business data.
 
 ## Data contract
 
@@ -51,14 +54,14 @@ Processed JSONL records have these fields:
   "instruction": "Question or task",
   "input": "Optional context",
   "output": "Expected response",
-  "category": "education",
+  "category": "general",
   "source": "provenance identifier",
   "license": "usage rights"
 }
 ```
 
-Never train on identifiable student, parent or staff records. Obtain authorization,
-document provenance and licensing, and use aggregate operational examples where possible.
+Never train on identifiable personal records. Obtain authorization, document provenance
+and licensing, and use aggregate operational examples where possible.
 
 ## Training
 
@@ -99,11 +102,25 @@ Generate:
 curl http://localhost:8000/v1/generate \
   -H "Authorization: Bearer replace-me" \
   -H "Content-Type: application/json" \
-  -d '{"prompt":"Explain formative assessment.","max_tokens":128}'
+  -d '{"prompt":"What is our return policy?","max_tokens":128}'
 ```
 
 Batch generation is `POST /v1/generate-batch`. Operational endpoints are `GET /health`
 and `GET /metrics`.
+
+## Continuous learning
+
+The platform supports a feedback-driven retraining loop:
+
+```bash
+# Collect user feedback into the learning store
+python -m src.continuous_learning.collector --db feedback.db
+
+# Trigger incremental fine-tuning on accumulated data
+python -m src.continuous_learning.train --db feedback.db --output checkpoints/v2
+```
+
+As your business grows and more data accumulates, the model improves automatically.
 
 ## GPU production
 
@@ -115,16 +132,15 @@ python scripts/benchmark.py --api-key "$EDSPIKE_API_KEY"
 ```
 
 Throughput depends on model architecture, quantization, prompt/output lengths, GPU,
-vLLM version and batch concurrency. The guide's 300 tokens/second figure is a benchmark
-target, not a guarantee; measure it on the final hardware and model.
+vLLM version and batch concurrency. Measure on your final hardware and model.
 
 ## Release checklist
 
 1. Verify data licensing, consent, provenance and de-identification.
-2. Run contamination, duplication, toxicity and Ghana-context quality reviews.
+2. Run contamination, duplication, toxicity and domain-context quality reviews.
 3. Record training configuration, dataset version and model checksum.
-4. Evaluate against a frozen held-out suite and human educators.
-5. Red-team privacy leakage, prompt injection and unsafe administrative actions.
+4. Evaluate against a frozen held-out suite and domain experts.
+5. Red-team privacy leakage, prompt injection and unsafe actions.
 6. Use API authentication, TLS, rate limiting and network isolation.
 7. Load-test the exact quantized release on production hardware.
 8. Establish rollback, incident response and model monitoring.
