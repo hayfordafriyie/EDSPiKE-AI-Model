@@ -1461,9 +1461,7 @@ pytest-asyncio==0.23.1
 
 ```bash
 # Build image
-docker build -t edspike-ai-model:v1-production \
-  --build-arg CUDA_VERSION=12.1 \
-  .
+docker build -t edspike-ai-model:v1-production -f infra/Dockerfile .
 
 # Run with resource constraints
 docker run \
@@ -1832,7 +1830,7 @@ python src/optimization/gptq_quantize.py \
     --output_dir checkpoints/gptq-4bit
 
 # 2. Deploy with vLLM (1 hour)
-docker build -t edspike-api:v1 .
+docker build -t edspike-api:v1 -f infra/Dockerfile .
 docker run --gpus all -p 8000:8000 edspike-api:v1
 
 # 3. Test throughput (5 minutes)

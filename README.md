@@ -127,7 +127,7 @@ As your business grows and more data accumulates, the model improves automatical
 Mount a compatible model at `./models/edspike`, set `INFERENCE_BACKEND=vllm`, then:
 
 ```bash
-docker compose up --build
+docker compose -f infra/docker-compose.yml up --build
 python scripts/benchmark.py --api-key "$EDSPIKE_API_KEY"
 ```
 
