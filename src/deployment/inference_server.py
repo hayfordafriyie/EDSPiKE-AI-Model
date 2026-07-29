@@ -21,6 +21,7 @@ from .engine import InferenceEngine, create_engine
 from .prometheus_metrics import LATENCY, MODEL_READY, REQUESTS, THROUGHPUT, TOKENS
 from src.agents.orchestrator import multi_agent_generate
 from src.agents.worker import AGENT_PROFILES
+from src.tools import ReActLoop, ToolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,8 @@ class GenerateRequest(BaseModel):
     images: list[str] | None = Field(default=None, description="Base64-encoded images or URLs")
     audio: list[str] | None = Field(default=None, description="Base64-encoded audio files or URLs")
     video: list[str] | None = Field(default=None, description="Base64-encoded video files or URLs")
+    use_tools: bool = Field(default=False, description="Enable tool-use (ReAct) mode for file ops, bash, etc.")
+    workspace_root: str | None = Field(default=None, description="Root directory for tool operations")
 
     @field_validator("prompt")
     @classmethod
@@ -181,6 +184,30 @@ def generate(payload: GenerateRequest, model: Annotated[InferenceEngine, Depends
     started = time.perf_counter()
     prompts = payload.prompts if payload.prompts else [payload.prompt]
     is_batch = payload.prompts is not None
+
+    if payload.use_tools and not is_batch and payload.prompt:
+        exec_roots = [payload.workspace_root] if payload.workspace_root else None
+        executor = ToolExecutor(allowed_roots=exec_roots)
+        loop = ReActLoop(
+            generate_fn=model.generate_batch,
+            executor=executor,
+            workspace=payload.workspace_root or ".",
+        )
+        react_result = loop.run(
+            question=payload.prompt,
+            max_tokens=payload.max_tokens * 4,
+            temperature=payload.temperature,
+        )
+        result = {
+            "response": react_result.final_answer,
+            "tokens_generated": react_result.total_tokens,
+            "latency_ms": (time.perf_counter() - started) * 1000,
+            "model": model.model_name,
+            "mode": "tool_react",
+            "turns": len(react_result.turns),
+        }
+        return result
+
     modality_context = _build_modality_context(payload)
 
     if payload.num_agents <= 1:

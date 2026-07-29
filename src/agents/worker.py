@@ -49,6 +49,12 @@ AGENT_PROFILES = [
         "temperature": 0.4,
         "top_p": 0.92,
     },
+    {
+        "name": "Coding",
+        "system": "You are an expert software engineer. Write clean, correct code. Use tools to read, create, and edit files as needed.",
+        "temperature": 0.3,
+        "top_p": 0.9,
+    },
 ]
 
 
