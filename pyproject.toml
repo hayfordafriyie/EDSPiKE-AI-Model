@@ -43,6 +43,7 @@ tui = ["rich>=13,<14", "prompt-toolkit>=3,<4"]
 test = ["pytest>=8,<9", "pytest-timeout>=2,<3", "httpx>=0.27,<1", "rich>=13,<14", "prompt-toolkit>=3,<4"]
 
 [project.scripts]
+edspike = "src.cli:run_cli"
 EDSPiKE-data = "src.data_pipeline.cli:main"
 EDSPiKE-train = "src.training.trainer:main"
 EDSPiKE-evaluate = "src.evaluation.evaluate:main"
