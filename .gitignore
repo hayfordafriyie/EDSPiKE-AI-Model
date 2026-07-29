@@ -16,3 +16,7 @@ reports/*
 # Model training outputs (not checked in)
 models/*/
 !models/EDSPiKE/
+
+# Local runtime data
+.edspike/
+*.log
