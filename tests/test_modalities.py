@@ -6,7 +6,7 @@ import io
 import pytest
 from PIL import Image
 
-from src.agents.worker import AGENT_PROFILES, build_agent_prompt
+from src.agents.worker import get_default_profiles, build_agent_prompt
 
 pytest.importorskip("PIL")
 
@@ -14,9 +14,9 @@ MULTIMODAL_AGENT_NAMES = {"Visual", "Auditory"}
 
 
 def test_multimodal_agent_profiles_present():
-    names = {p["name"] for p in AGENT_PROFILES}
-    assert "Visual" in names
-    assert "Auditory" in names
+    names = {p["name"] for p in get_default_profiles()}
+    assert "Visual Analyst" in names
+    assert "Audio Analyst" in names
 
 
 def test_agent_prompt_with_modality_context():
@@ -34,9 +34,9 @@ def test_agent_prompt_without_modality_context():
 
 
 def test_agent_profiles_include_visual_and_auditory():
-    visual = next(p for p in AGENT_PROFILES if p["name"] == "Visual")
+    visual = next(p for p in get_default_profiles() if p["name"] == "Visual Analyst")
     assert "visual" in visual["system"].lower()
-    auditory = next(p for p in AGENT_PROFILES if p["name"] == "Auditory")
+    auditory = next(p for p in get_default_profiles() if p["name"] == "Audio Analyst")
     assert "audio" in auditory["system"].lower()
 
 

@@ -21,14 +21,17 @@ load_dotenv(Path(__file__).parents[2] / ".env")
 from .engine import InferenceEngine, create_engine
 from .prometheus_metrics import LATENCY, MODEL_READY, REQUESTS, THROUGHPUT, TOKENS
 from src.agents.orchestrator import multi_agent_generate
-from src.agents.worker import AGENT_PROFILES
+from src.agents.worker import get_default_profiles
 from src.tools import ReActLoop, ToolExecutor
 from src.tools.permissions import ApprovalDecision, ApprovalManager
 from src.providers import get_provider, SUPPORTED_PROVIDERS
+from src.session import SessionStore, SessionStatus
+from src.agents.definitions import get_agent, list_agents
 
 logger = logging.getLogger(__name__)
 
 _approval_manager = ApprovalManager()
+_session_store = SessionStore()
 
 MAX_BATCH = int(os.getenv("MAX_BATCH_SIZE", "64"))
 
@@ -272,7 +275,7 @@ def generate(payload: GenerateRequest, local_engine: Annotated[InferenceEngine |
     else:
         result = multi_agent_generate(
             generate_fn=gen_fn, question=payload.prompt or prompts[0],
-            profiles=AGENT_PROFILES[:payload.num_agents],
+            profiles=get_default_profiles()[:payload.num_agents],
             max_worker_tokens=payload.max_worker_tokens or payload.max_tokens,
             max_judge_tokens=payload.max_judge_tokens or payload.max_tokens * 2,
             max_workers=payload.num_agents, modality_context=modality_context,
@@ -307,7 +310,7 @@ def generate_stream(payload: GenerateRequest, local_engine: Annotated[InferenceE
             from src.agents.orchestrator import multi_agent_generate
             result = multi_agent_generate(
                 generate_fn=gen_fn, question=payload.prompt or prompts[0],
-                profiles=AGENT_PROFILES[:payload.num_agents],
+                profiles=get_default_profiles()[:payload.num_agents],
                 max_worker_tokens=payload.max_worker_tokens or payload.max_tokens,
                 max_judge_tokens=payload.max_judge_tokens or payload.max_tokens * 2,
                 max_workers=payload.num_agents, modality_context=modality_ctx,
@@ -356,3 +359,268 @@ def approve(payload: ApproveRequest):
     if "error" in result:
         raise HTTPException(status_code=400, detail=result["error"])
     return result
+
+
+# ── Sessions API ─────────────────────────────────────────────────────────
+
+class CreateSessionRequest(BaseModel):
+    agent_id: str = Field(default="default")
+    provider: str = Field(default="local")
+    model: str = Field(default="")
+    metadata: dict | None = Field(default=None)
+
+
+class AppendMessageRequest(BaseModel):
+    role: str = Field(...)
+    content: str | list = Field(...)
+    metadata: dict | None = Field(default=None)
+
+
+@app.post("/v1/sessions", dependencies=[Depends(require_api_key)])
+def create_session(payload: CreateSessionRequest):
+    session = _session_store.create_session(
+        agent_id=payload.agent_id, provider=payload.provider,
+        model=payload.model, metadata=payload.metadata,
+    )
+    return {"session_id": session.id, "status": session.status.value}
+
+
+@app.get("/v1/sessions", dependencies=[Depends(require_api_key)])
+def list_sessions(limit: int = 50, offset: int = 0):
+    sessions = _session_store.list_sessions(limit=limit, offset=offset)
+    return {
+        "sessions": [
+            {"id": s.id, "agent_id": s.agent_id, "status": s.status.value,
+             "message_count": len(s.messages), "created_at": s.created_at, "updated_at": s.updated_at}
+            for s in sessions
+        ],
+        "total": len(sessions),
+    }
+
+
+@app.get("/v1/sessions/{session_id}", dependencies=[Depends(require_api_key)])
+def get_session(session_id: str):
+    session = _session_store.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {
+        "id": session.id, "agent_id": session.agent_id,
+        "provider": session.provider, "model": session.model,
+        "status": session.status.value, "messages": session.messages,
+        "metadata": session.metadata,
+        "created_at": session.created_at, "updated_at": session.updated_at,
+    }
+
+
+@app.post("/v1/sessions/{session_id}/messages", dependencies=[Depends(require_api_key)])
+def append_message(session_id: str, payload: AppendMessageRequest):
+    session = _session_store.append_message(session_id, payload.role, payload.content, payload.metadata)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"message_count": len(session.messages)}
+
+
+@app.get("/v1/sessions/{session_id}/events", dependencies=[Depends(require_api_key)])
+def get_session_events(session_id: str, after_id: str | None = None):
+    events = _session_store.get_event_stream(session_id, after_id=after_id)
+    return {
+        "events": [
+            {"id": e.id, "type": e.event_type, "data": e.data, "created_at": e.created_at}
+            for e in events
+        ],
+    }
+
+
+@app.post("/v1/sessions/{session_id}/interrupt", dependencies=[Depends(require_api_key)])
+def interrupt_session(session_id: str):
+    ok = _session_store.update_status(session_id, SessionStatus.INTERRUPTED)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"status": "interrupted"}
+
+
+@app.delete("/v1/sessions/{session_id}", dependencies=[Depends(require_api_key)])
+def delete_session(session_id: str):
+    ok = _session_store.delete_session(session_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"status": "deleted"}
+
+
+# ── Agents API ────────────────────────────────────────────────────────────
+
+@app.get("/v1/agents", dependencies=[Depends(require_api_key)])
+def list_agents_endpoint():
+    return {"agents": list_agents()}
+
+
+@app.get("/v1/agents/{agent_id}", dependencies=[Depends(require_api_key)])
+def get_agent_endpoint(agent_id: str):
+    try:
+        agent = get_agent(agent_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {
+        "id": agent.id, "name": agent.name, "description": agent.description,
+        "temperature": agent.temperature, "tools_enabled": agent.tools_enabled,
+    }
+
+
+# ── Providers API ─────────────────────────────────────────────────────────
+
+@app.get("/v1/providers", dependencies=[Depends(require_api_key)])
+def list_providers():
+    return {
+        "providers": sorted(SUPPORTED_PROVIDERS),
+        "default": "local",
+    }
+
+
+# ── Models API (inferred from providers) ──────────────────────────────────
+
+MODEL_CATALOG = [
+    {"id": "gpt-4o", "provider": "openai", "description": "OpenAI GPT-4o"},
+    {"id": "gpt-4o-mini", "provider": "openai", "description": "OpenAI GPT-4o Mini"},
+    {"id": "claude-3-5-sonnet-20241022", "provider": "anthropic", "description": "Claude 3.5 Sonnet"},
+    {"id": "claude-3-haiku-20240307", "provider": "anthropic", "description": "Claude 3 Haiku"},
+    {"id": "gemini-1.5-pro", "provider": "google", "description": "Gemini 1.5 Pro"},
+    {"id": "gemini-1.5-flash", "provider": "google", "description": "Gemini 1.5 Flash"},
+    {"id": "deepseek-chat", "provider": "deepseek", "description": "DeepSeek Chat"},
+    {"id": "deepseek-coder", "provider": "deepseek", "description": "DeepSeek Coder"},
+    {"id": "local", "provider": "local", "description": "Local model via Transformers"},
+]
+
+
+@app.get("/v1/models", dependencies=[Depends(require_api_key)])
+def list_models(provider: str | None = None):
+    models = MODEL_CATALOG
+    if provider:
+        models = [m for m in models if m["provider"] == provider]
+    return {"models": models}
+
+
+# ── Filesystem API ────────────────────────────────────────────────────────
+
+class ReadFileRequest(BaseModel):
+    path: str = Field(...)
+    offset: int = Field(default=1)
+    limit: int | None = Field(default=None)
+
+
+class WriteFileRequest(BaseModel):
+    path: str = Field(...)
+    content: str = Field(...)
+
+
+class EditFileRequest(BaseModel):
+    path: str = Field(...)
+    old_string: str = Field(...)
+    new_string: str = Field(...)
+
+
+class GrepRequest(BaseModel):
+    pattern: str = Field(...)
+    path: str = Field(default=".")
+
+
+@app.post("/v1/fs/read", dependencies=[Depends(require_api_key)])
+def fs_read(payload: ReadFileRequest):
+    from src.tools import ToolExecutor
+    exec = ToolExecutor()
+    try:
+        content = exec.execute("read_file", {"path": payload.path, "offset": payload.offset, "limit": payload.limit})
+        return {"content": content, "path": payload.path}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/fs/write", dependencies=[Depends(require_api_key)])
+def fs_write(payload: WriteFileRequest):
+    from src.tools import ToolExecutor
+    exec = ToolExecutor()
+    try:
+        result = exec.execute("write_file", {"path": payload.path, "content": payload.content})
+        return {"result": result}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/fs/edit", dependencies=[Depends(require_api_key)])
+def fs_edit(payload: EditFileRequest):
+    from src.tools import ToolExecutor
+    exec = ToolExecutor()
+    try:
+        result = exec.execute("edit_file", {"path": payload.path, "old_string": payload.old_string, "new_string": payload.new_string})
+        return {"result": result}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/v1/fs/ls", dependencies=[Depends(require_api_key)])
+def fs_ls(path: str = "."):
+    from src.tools import ToolExecutor
+    exec = ToolExecutor()
+    try:
+        entries = exec.execute("ls", {"path": path})
+        return {"entries": entries.split("\n") if entries else [], "path": path}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/v1/fs/glob", dependencies=[Depends(require_api_key)])
+def fs_glob(pattern: str, path: str = "."):
+    from src.tools import ToolExecutor
+    exec = ToolExecutor()
+    try:
+        result = exec.execute("glob", {"pattern": pattern, "path": path})
+        return {"files": result.split("\n") if result else []}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/fs/grep", dependencies=[Depends(require_api_key)])
+def fs_grep(payload: GrepRequest):
+    from src.tools import ToolExecutor
+    exec = ToolExecutor()
+    try:
+        result = exec.execute("grep", {"pattern": payload.pattern, "path": payload.path})
+        return {"matches": result.split("\n") if result else []}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ── CodeMode API ───────────────────────────────────────────────────────────
+
+class CodeExecuteRequest(BaseModel):
+    code: str = Field(..., max_length=50000)
+    language: str = Field(default="python")
+    timeout: float | None = Field(default=None, ge=1, le=120)
+    stdin: str = Field(default="")
+    env: dict[str, str] | None = Field(default=None)
+    metadata: dict[str, Any] | None = Field(default=None)
+
+
+@app.post("/v1/codemode/execute", dependencies=[Depends(require_api_key)])
+def codemode_execute(payload: CodeExecuteRequest):
+    from src.codemode import CodeExecutor
+    exec = CodeExecutor()
+    result = exec.execute(
+        code=payload.code,
+        language=payload.language,
+        timeout=payload.timeout,
+        stdin=payload.stdin,
+        env=payload.env,
+        metadata=payload.metadata,
+    )
+    return {
+        "id": result.id,
+        "language": result.language,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "exit_code": result.exit_code,
+        "timed_out": result.timed_out,
+        "duration_ms": result.duration_ms,
+        "errors": result.errors,
+    }
+
+
