@@ -23,35 +23,32 @@ from src.agents.worker import AGENT_PROFILES
 
 logger = logging.getLogger(__name__)
 
+MAX_BATCH = int(os.getenv("MAX_BATCH_SIZE", "64"))
 
-class GenerationRequest(BaseModel):
-    prompt: str = Field(min_length=1, max_length=20000)
+
+class GenerateRequest(BaseModel):
+    prompt: str | None = Field(default=None, min_length=1, max_length=20000)
+    prompts: list[str] | None = Field(default=None)
     max_tokens: int = Field(default=256, ge=1, le=2048)
     temperature: float = Field(default=0.7, ge=0, le=2)
     top_p: float = Field(default=0.95, gt=0, le=1)
+    num_agents: int = Field(default=5, ge=1, le=10)
+    max_worker_tokens: int | None = Field(default=None, ge=64, le=2048)
+    max_judge_tokens: int | None = Field(default=None, ge=128, le=4096)
 
-
-class AgentRequest(BaseModel):
-    prompt: str = Field(min_length=1, max_length=20000)
-    max_worker_tokens: int = Field(default=512, ge=64, le=2048)
-    max_judge_tokens: int = Field(default=1024, ge=128, le=4096)
-    num_agents: int = Field(default=5, ge=2, le=10)
-
-
-class BatchRequest(BaseModel):
-    prompts: list[str]
-    max_tokens: int = Field(default=256, ge=1, le=2048)
-    temperature: float = Field(default=0.7, ge=0, le=2)
-    top_p: float = Field(default=0.95, gt=0, le=1)
+    @field_validator("prompt")
+    @classmethod
+    def check_prompt(cls, value: str | None) -> str | None:
+        return value
 
     @field_validator("prompts")
     @classmethod
-    def validate_prompts(cls, value: list[str]) -> list[str]:
-        maximum = int(os.getenv("MAX_BATCH_SIZE", "64"))
-        if not value or len(value) > maximum:
-            raise ValueError(f"prompts must contain 1 to {maximum} values")
-        if any(not prompt.strip() or len(prompt) > 20000 for prompt in value):
-            raise ValueError("each prompt must contain 1 to 20,000 characters")
+    def check_prompts(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None:
+            if not value or len(value) > MAX_BATCH:
+                raise ValueError(f"prompts must contain 1 to {MAX_BATCH} values")
+            if any(not p.strip() or len(p) > 20000 for p in value):
+                raise ValueError("each prompt must contain 1 to 20,000 characters")
         return value
 
 
@@ -100,14 +97,15 @@ async def metrics_middleware(request: Request, call_next):
         return response
     finally:
         REQUESTS.labels(request.url.path, status).inc()
-        if request.url.path in {"/v1/generate", "/v1/generate-batch", "/v1/generate-agents"}:
+        if request.url.path == "/v1/generate":
             LATENCY.observe(time.perf_counter() - started)
 
 
 def engine(request: Request) -> InferenceEngine:
-    if request.app.state.engine is None:
+    eng = getattr(request.app.state, "engine", None)
+    if eng is None:
         raise HTTPException(status_code=503, detail=request.app.state.error or "Model is not loaded")
-    return request.app.state.engine
+    return eng
 
 
 def run_generation(model: InferenceEngine, prompts: list[str], max_tokens: int, temperature: float, top_p: float):
@@ -123,10 +121,10 @@ def run_generation(model: InferenceEngine, prompts: list[str], max_tokens: int, 
 
 @app.get("/health")
 def health(request: Request):
-    ready = request.app.state.engine is not None
+    ready = getattr(request.app.state, "engine", None) is not None
     return JSONResponse(
         status_code=200 if ready else 503,
-        content={"status": "ready" if ready else "not_ready", "error": request.app.state.error},
+        content={"status": "ready" if ready else "not_ready", "error": getattr(request.app.state, "error", None)},
     )
 
 
@@ -136,43 +134,38 @@ def metrics():
 
 
 @app.post("/v1/generate", dependencies=[Depends(require_api_key)])
-def generate(payload: GenerationRequest, model: Annotated[InferenceEngine, Depends(engine)]):
-    responses, counts, elapsed, throughput = run_generation(
-        model, [payload.prompt], payload.max_tokens, payload.temperature, payload.top_p,
-    )
-    return {
-        "response": responses[0], "tokens_generated": counts[0],
-        "latency_ms": elapsed * 1000, "throughput_tokens_per_second": throughput,
-        "model": model.model_name,
-    }
-
-
-@app.post("/v1/generate-batch", dependencies=[Depends(require_api_key)])
-def generate_batch(payload: BatchRequest, model: Annotated[InferenceEngine, Depends(engine)]):
-    responses, counts, elapsed, throughput = run_generation(
-        model, payload.prompts, payload.max_tokens, payload.temperature, payload.top_p,
-    )
-    return {
-        "responses": responses, "tokens_generated": sum(counts),
-        "latency_ms": elapsed * 1000, "throughput_tokens_per_second": throughput,
-        "model": model.model_name,
-    }
-
-
-@app.post("/v1/generate-agents", dependencies=[Depends(require_api_key)])
-def generate_agents(payload: AgentRequest, model: Annotated[InferenceEngine, Depends(engine)]):
+def generate(payload: GenerateRequest, model: Annotated[InferenceEngine, Depends(engine)]):
     started = time.perf_counter()
-    profiles = AGENT_PROFILES[:payload.num_agents]
-    result = multi_agent_generate(
-        generate_fn=model.generate_batch,
-        question=payload.prompt,
-        profiles=profiles,
-        max_worker_tokens=payload.max_worker_tokens,
-        max_judge_tokens=payload.max_judge_tokens,
-        max_workers=payload.num_agents,
-    )
-    elapsed = time.perf_counter() - started
-    result["latency_ms"] = elapsed * 1000
-    result["model"] = model.model_name
-    return result
+    prompts = payload.prompts if payload.prompts else [payload.prompt]
+    is_batch = payload.prompts is not None
 
+    if payload.num_agents <= 1:
+        responses, counts, elapsed, throughput = run_generation(
+            model, prompts, payload.max_tokens, payload.temperature, payload.top_p,
+        )
+        if is_batch:
+            result = {
+                "responses": responses, "tokens_generated": sum(counts),
+                "latency_ms": elapsed * 1000, "throughput_tokens_per_second": throughput,
+                "model": model.model_name,
+            }
+        else:
+            result = {
+                "response": responses[0], "tokens_generated": counts[0],
+                "latency_ms": elapsed * 1000, "throughput_tokens_per_second": throughput,
+                "model": model.model_name,
+            }
+    else:
+        profiles = AGENT_PROFILES[:payload.num_agents]
+        result = multi_agent_generate(
+            generate_fn=model.generate_batch,
+            question=payload.prompt or prompts[0],
+            profiles=profiles,
+            max_worker_tokens=payload.max_worker_tokens or payload.max_tokens,
+            max_judge_tokens=payload.max_judge_tokens or payload.max_tokens * 2,
+            max_workers=payload.num_agents,
+        )
+        elapsed = time.perf_counter() - started
+        result["latency_ms"] = elapsed * 1000
+        result["model"] = model.model_name
+    return result
