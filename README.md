@@ -1,28 +1,35 @@
-# EDSPiKE AI Model — Business AI Platform
+# EDSPiKE AI Agent — Autonomous AI Coding & Business Platform
 
-Production-grade data pipeline, training, evaluation, optimization and inference stack for
-building domain-agnostic language models that **learn continuously from your business data**.
-Any organization can plug in their data and get an AI assistant that grows smarter over time.
-
-The repository works without model weights; GPU training and production inference require
-datasets, a base model and suitable NVIDIA hardware.
+Production-grade multi-agent orchestration, tool-use (ReAct), continuous learning, and
+deployment stack for building domain-agnostic AI agents that **learn continuously from your data**.
+Any organization can plug in their data and get an AI agent that grows smarter over time.
 
 ## What is included
 
 - **Privacy-first data collector** with deterministic pseudonymization (JSON/JSONL/CSV/TXT/MD)
 - **Data ingestion pipeline** — normalization, filtering, deduplication, stratified splitting
-- **Custom BPE tokenizer** workflow
-- **Llama-style** from-scratch architecture and pretrained-model training paths
-- **Reproducible Hugging Face Trainer** workflow
-- **Evaluation** — exact-match, token-F1, readability, business-domain relevance, code syntax
-- **AWQ 4-bit quantization** for deployment
-- **Dual inference backends** — Transformers (dev/CPU) and vLLM (production GPU)
-- **FastAPI server** with auth, rate limits, Prometheus metrics, batch generation
+- **Multi-agent orchestration** — 8+ agent definitions, worker pool, boss judge, ReAct tool-use loop
+- **AI provider system** — OpenAI, Anthropic, Google, DeepSeek, local models with smart routing
+- **Session store** — SQLite with event sourcing, session runner, sharing, undo/redo
+- **LSP integration** — code intelligence, diagnostics, goto-definition, references, hover
+- **CodeMode sandbox** — isolated subprocess execution with plugin hooks
+- **Virtual filesystem** — path allowlisting, file mutation tracking, change detection
+- **Shell/PTY** — interactive shell execution with PtyProcess
+- **Git tool operations** — status, diff, log, commit, branch, checkout
+- **MCP protocol** — Model Context Protocol server + client for external tool integration
+- **Plugin host** — directory discovery, .py loading, event hook system
+- **Config system** — JSON/YAML layered config with env var overrides
+- **Credential store** — SQLite-backed persistent key/value store
+- **Policy engine** — action/resource pattern matching, priority ordering, allow/deny/ask
 - **Continuous learning loop** — collect feedback, store interactions, trigger retraining
+- **FastAPI server** — multi-endpoint API (sessions, agents, providers, models, fs, codemode)
+- **CLI + TUI** — non-interactive prompt mode, interactive REPL with rich markdown
+- **Scout agent** — clone & inspect dependency repos, file/language/dependency analysis
+- **Project scanner** — auto-generate AGENTS.md with language, build system, conventions
+- **Rules system** — AGENTS.md + CLAUDE.md loading, global rules, instruction references
+- **Custom commands** — named arguments, handlers, /cmd --key val parsing
+- **Background jobs, OAuth, feature flags, snapshots, telemetry, skills, integrations**
 - **Docker Compose** deployment with Prometheus monitoring
-- **Benchmark script** and **automated tests**
-
-Model weights and copyrighted training material are intentionally excluded.
 
 ## Quick start
 

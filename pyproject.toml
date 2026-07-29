@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "EDSPiKE-ai-model"
+name = "EDSPiKE-ai-agent"
 version = "1.0.2"
-description = "Domain-agnostic LLM platform: data pipeline, training, evaluation, inference and continuous learning for any business"
+description = "Domain-agnostic AI agent platform: multi-agent orchestration, tool-use, continuous learning for any business"
 requires-python = ">=3.10"
 dependencies = [
   "PyYAML>=6.0,<7",
