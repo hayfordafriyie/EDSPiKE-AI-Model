@@ -33,20 +33,37 @@ Any organization can plug in their data and get an AI agent that grows smarter o
 
 ## Quick start
 
+### 1. One-command install (recommended)
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e ".[test]"
-pytest
+curl -fsSL https://raw.githubusercontent.com/hayfordafriyie/EDSPiKE-AI-Model/Staging/scripts/install.sh | bash
 ```
 
-For the ML stack:
-
+### 2. Manual install
 ```bash
-pip install -e ".[ml,test]"
-cp data/sample_input.jsonl data/raw/sample.jsonl
-python -m src.data_pipeline.cli process
-python -m src.data_pipeline.cli split
+git clone https://github.com/hayfordafriyie/EDSPiKE-AI-Model.git
+cd EDSPiKE-AI-Model
+
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[test]"
+```
+
+### 3. Run
+```bash
+# Check version
+edspike --version
+
+# Run tests
+pytest
+
+# Interactive mode (TUI)
+edspike
+
+# Non-interactive mode
+edspike "your prompt here"
+
+# Help
+edspike --help
 ```
 
 The sample demonstrates data formats but is too small for meaningful training.
