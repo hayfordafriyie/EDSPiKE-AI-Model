@@ -17,7 +17,7 @@ training:
   warmup_ratio: 0.03
   weight_decay: 0.01
   logging_steps: 10
-  eval_strategy: no
+  eval_strategy: "no"
   save_steps: 500
   output_dir: checkpoints/cpu-tiny
 data:

@@ -96,7 +96,7 @@ export EDSPIKE_API_KEY='replace-me'
 uvicorn src.deployment.inference_server:app --host 0.0.0.0 --port 8000
 ```
 
-Generate:
+Generate (single):
 
 ```bash
 curl http://localhost:8000/v1/generate \
@@ -105,8 +105,25 @@ curl http://localhost:8000/v1/generate \
   -d '{"prompt":"What is our return policy?","max_tokens":128}'
 ```
 
-Batch generation is `POST /v1/generate-batch`. Operational endpoints are `GET /health`
-and `GET /metrics`.
+Generate (batch):
+
+```bash
+curl http://localhost:8000/v1/generate \
+  -H "Authorization: Bearer replace-me" \
+  -H "Content-Type: application/json" \
+  -d '{"prompts":["Question 1?","Question 2?"],"max_tokens":128}'
+```
+
+Generate (multi-agent, default — 5 agents + boss judge):
+
+```bash
+curl http://localhost:8000/v1/generate \
+  -H "Authorization: Bearer replace-me" \
+  -H "Content-Type: application/json" \
+  -d '{"prompt":"What is our return policy?","num_agents":5}'
+```
+
+For single direct response (no agents), set `num_agents: 1`. Operational endpoints are `GET /health` and `GET /metrics`.
 
 ## Continuous learning
 
@@ -124,10 +141,10 @@ As your business grows and more data accumulates, the model improves automatical
 
 ## GPU production
 
-Mount a compatible model at `./models/edspike`, set `INFERENCE_BACKEND=vllm`, then:
+Mount a compatible model at `./models/EDSPiKE`, set `INFERENCE_BACKEND=vllm`, then:
 
 ```bash
-docker compose up --build
+docker compose -f infra/docker-compose.yml up --build
 python scripts/benchmark.py --api-key "$EDSPIKE_API_KEY"
 ```
 

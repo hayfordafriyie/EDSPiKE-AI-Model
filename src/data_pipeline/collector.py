@@ -18,7 +18,7 @@ SENSITIVE_KEYS = {
 class DataCollector:
     """Collect local, licensed sources and anonymize operational records."""
 
-    def __init__(self, raw_data_dir: str | Path = "data/raw", salt: str = "edspike") -> None:
+    def __init__(self, raw_data_dir: str | Path = "data/raw", salt: str = "EDSPiKE") -> None:
         self.raw_dir = Path(raw_data_dir)
         self.raw_dir.mkdir(parents=True, exist_ok=True)
         self.salt = salt

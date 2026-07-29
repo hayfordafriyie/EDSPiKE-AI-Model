@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import base64
 import hmac
+import json
 import logging
 import os
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -18,32 +20,62 @@ load_dotenv(Path(__file__).parents[2] / ".env")
 
 from .engine import InferenceEngine, create_engine
 from .prometheus_metrics import LATENCY, MODEL_READY, REQUESTS, THROUGHPUT, TOKENS
+from src.agents.orchestrator import multi_agent_generate
+from src.agents.worker import get_default_profiles
+from src.tools import ReActLoop, ToolExecutor
+from src.tools.permissions import ApprovalDecision, ApprovalManager
+from src.providers import get_provider, SUPPORTED_PROVIDERS
+from src.session import SessionStore, SessionStatus
+from src.agents.definitions import get_agent, list_agents
 
 logger = logging.getLogger(__name__)
 
+_approval_manager = ApprovalManager()
+_session_store = SessionStore()
 
-class GenerationRequest(BaseModel):
-    prompt: str = Field(min_length=1, max_length=20000)
+MAX_BATCH = int(os.getenv("MAX_BATCH_SIZE", "64"))
+
+
+class GenerateRequest(BaseModel):
+    prompt: str | None = Field(default=None, min_length=1, max_length=20000)
+    prompts: list[str] | None = Field(default=None)
     max_tokens: int = Field(default=256, ge=1, le=2048)
     temperature: float = Field(default=0.7, ge=0, le=2)
     top_p: float = Field(default=0.95, gt=0, le=1)
+    num_agents: int = Field(default=5, ge=1, le=10)
+    max_worker_tokens: int | None = Field(default=None, ge=64, le=2048)
+    max_judge_tokens: int | None = Field(default=None, ge=128, le=4096)
+    images: list[str] | None = Field(default=None)
+    audio: list[str] | None = Field(default=None)
+    video: list[str] | None = Field(default=None)
+    use_tools: bool = Field(default=False)
+    approval_mode: str = Field(default="auto")
+    workspace_root: str | None = Field(default=None)
+    provider: str = Field(default="local")
+    api_key: str | None = Field(default=None)
+    model: str | None = Field(default=None)
+    stream: bool = Field(default=False)
 
-
-class BatchRequest(BaseModel):
-    prompts: list[str]
-    max_tokens: int = Field(default=256, ge=1, le=2048)
-    temperature: float = Field(default=0.7, ge=0, le=2)
-    top_p: float = Field(default=0.95, gt=0, le=1)
+    @field_validator("prompt")
+    @classmethod
+    def check_prompt(cls, value: str | None) -> str | None:
+        return value
 
     @field_validator("prompts")
     @classmethod
-    def validate_prompts(cls, value: list[str]) -> list[str]:
-        maximum = int(os.getenv("MAX_BATCH_SIZE", "64"))
-        if not value or len(value) > maximum:
-            raise ValueError(f"prompts must contain 1 to {maximum} values")
-        if any(not prompt.strip() or len(prompt) > 20000 for prompt in value):
-            raise ValueError("each prompt must contain 1 to 20,000 characters")
+    def check_prompts(cls, value: list[str] | None) -> list[str] | None:
+        if value is not None:
+            if not value or len(value) > MAX_BATCH:
+                raise ValueError(f"prompts must contain 1 to {MAX_BATCH} values")
+            if any(not p.strip() or len(p) > 20000 for p in value):
+                raise ValueError("each prompt must contain 1 to 20,000 characters")
         return value
+
+
+class ApproveRequest(BaseModel):
+    session_id: str = Field(...)
+    action: str = Field(..., pattern=r"^(approve_one|approve_all|reject)$")
+    index: int | None = Field(default=None)
 
 
 def require_api_key(authorization: Annotated[str | None, Header()] = None) -> None:
@@ -91,19 +123,20 @@ async def metrics_middleware(request: Request, call_next):
         return response
     finally:
         REQUESTS.labels(request.url.path, status).inc()
-        if request.url.path in {"/v1/generate", "/v1/generate-batch"}:
+        if request.url.path == "/v1/generate":
             LATENCY.observe(time.perf_counter() - started)
 
 
 def engine(request: Request) -> InferenceEngine:
-    if request.app.state.engine is None:
+    eng = getattr(request.app.state, "engine", None)
+    if eng is None:
         raise HTTPException(status_code=503, detail=request.app.state.error or "Model is not loaded")
-    return request.app.state.engine
+    return eng
 
 
-def run_generation(model: InferenceEngine, prompts: list[str], max_tokens: int, temperature: float, top_p: float):
+def _run_generation(gen_fn: callable, prompts: list[str], max_tokens: int, temperature: float, top_p: float):
     started = time.perf_counter()
-    responses, counts = model.generate_batch(prompts, max_tokens, temperature, top_p)
+    responses, counts = gen_fn(prompts, max_tokens, temperature, top_p)
     elapsed = time.perf_counter() - started
     total = sum(counts)
     throughput = total / elapsed if elapsed else 0
@@ -112,12 +145,64 @@ def run_generation(model: InferenceEngine, prompts: list[str], max_tokens: int, 
     return responses, counts, elapsed, throughput
 
 
+def _build_modality_context(payload: GenerateRequest) -> str:
+    context_parts: list[str] = []
+    images = getattr(payload, "images", None)
+    audio = getattr(payload, "audio", None)
+    video = getattr(payload, "video", None)
+    if not any([images, audio, video]):
+        return ""
+    try:
+        from src.modalities import describe_image, transcribe_audio, process_video
+    except ImportError:
+        logger.warning("modalities module not available")
+        return ""
+    if images:
+        for i, img in enumerate(images):
+            try:
+                raw = base64.b64decode(img)
+                desc = describe_image(raw)
+                context_parts.append(f"Image {i + 1}: {desc}")
+            except Exception:
+                logger.exception("Failed to process image %d", i)
+    if audio:
+        for i, aud in enumerate(audio):
+            try:
+                raw = base64.b64decode(aud)
+                text = transcribe_audio(raw)
+                context_parts.append(f"Audio {i + 1} transcription: {text}")
+            except Exception:
+                logger.exception("Failed to process audio %d", i)
+    if video:
+        for i, vid in enumerate(video):
+            try:
+                raw = base64.b64decode(vid)
+                analysis = process_video(raw)
+                context_parts.append(f"Video {i + 1}: {analysis}")
+            except Exception:
+                logger.exception("Failed to process video %d", i)
+    return "\n".join(context_parts)
+
+
+def _resolve_gen_fn(payload: GenerateRequest, local_engine: InferenceEngine | None):
+    if payload.provider == "local":
+        if local_engine is None:
+            raise HTTPException(status_code=503, detail="Local model is not loaded")
+        return local_engine.generate_batch, getattr(local_engine, "model_name", "local")
+    prov = get_provider(
+        provider=payload.provider,
+        api_key=payload.api_key or os.getenv(f"{payload.provider.upper()}_API_KEY"),
+        model=payload.model,
+    )
+    return prov.generate_batch, prov.model_name
+
+
 @app.get("/health")
 def health(request: Request):
-    ready = request.app.state.engine is not None
+    ready = getattr(request.app.state, "engine", None) is not None
     return JSONResponse(
         status_code=200 if ready else 503,
-        content={"status": "ready" if ready else "not_ready", "error": request.app.state.error},
+        content={"status": "ready" if ready else "not_ready", "error": getattr(request.app.state, "error", None)},
     )
 
 
@@ -127,25 +212,415 @@ def metrics():
 
 
 @app.post("/v1/generate", dependencies=[Depends(require_api_key)])
-def generate(payload: GenerationRequest, model: Annotated[InferenceEngine, Depends(engine)]):
-    responses, counts, elapsed, throughput = run_generation(
-        model, [payload.prompt], payload.max_tokens, payload.temperature, payload.top_p,
+def generate(payload: GenerateRequest, local_engine: Annotated[InferenceEngine | None, Depends(engine)] = None):
+    started = time.perf_counter()
+    prompts = payload.prompts if payload.prompts else [payload.prompt]
+    is_batch = payload.prompts is not None
+
+    gen_fn, model_name = _resolve_gen_fn(payload, local_engine)
+
+    if payload.use_tools and not is_batch and payload.prompt:
+        exec_roots = [payload.workspace_root] if payload.workspace_root else None
+        executor = ToolExecutor(allowed_roots=exec_roots)
+
+        if payload.approval_mode == "manual":
+            schemas = json.dumps([{
+                "name": t.name, "description": t.description, "parameters": t.parameters,
+            } for t in __import__("src.tools.registry", fromlist=[""]).BUILTIN_TOOLS])
+            system = (
+                f"You are an AI coding agent with access to tools.\n\n"
+                f"## Available Tools\n{schemas}\n\n"
+                f"## How to use tools\n"
+                f'<tool_call>\n{{"name": "tool_name", "arguments": {{...}}}}\n</tool_call>\n\n'
+                f"Workspace: {payload.workspace_root or '.'}\n\nBegin."
+            )
+            messages = [system, f"## Task\n{payload.prompt}"]
+            sid = _approval_manager.create_session(
+                generate_fn=gen_fn, executor=executor, messages=messages,
+                max_tokens=payload.max_tokens * 4, temperature=payload.temperature,
+            )
+            result = _approval_manager._run_next_turn(_approval_manager._sessions[sid])
+            result["model"] = model_name
+            result["provider"] = payload.provider
+            return result
+
+        loop = ReActLoop(generate_fn=gen_fn, executor=executor, workspace=payload.workspace_root or ".")
+        react_result = loop.run(
+            question=payload.prompt, max_tokens=payload.max_tokens * 4, temperature=payload.temperature,
+        )
+        return {
+            "response": react_result.final_answer,
+            "tokens_generated": react_result.total_tokens,
+            "latency_ms": (time.perf_counter() - started) * 1000,
+            "model": model_name, "provider": payload.provider,
+            "mode": "tool_react", "turns": len(react_result.turns),
+        }
+
+    modality_context = _build_modality_context(payload)
+
+    if payload.num_agents <= 1:
+        if modality_context and prompts:
+            prompts = [f"{p}\n\n{modality_context}" for p in prompts]
+        responses, counts, elapsed, throughput = _run_generation(gen_fn, prompts, payload.max_tokens, payload.temperature, payload.top_p)
+        result = {
+            "latency_ms": elapsed * 1000, "throughput_tokens_per_second": throughput,
+            "model": model_name, "provider": payload.provider,
+        }
+        if is_batch:
+            result["responses"] = responses
+            result["tokens_generated"] = sum(counts)
+        else:
+            result["response"] = responses[0]
+            result["tokens_generated"] = counts[0]
+    else:
+        result = multi_agent_generate(
+            generate_fn=gen_fn, question=payload.prompt or prompts[0],
+            profiles=get_default_profiles()[:payload.num_agents],
+            max_worker_tokens=payload.max_worker_tokens or payload.max_tokens,
+            max_judge_tokens=payload.max_judge_tokens or payload.max_tokens * 2,
+            max_workers=payload.num_agents, modality_context=modality_context,
+        )
+        result["latency_ms"] = (time.perf_counter() - started) * 1000
+        result["model"] = model_name
+        result["provider"] = payload.provider
+    return result
+
+
+@app.post("/v1/generate/stream", dependencies=[Depends(require_api_key)])
+def generate_stream(payload: GenerateRequest, local_engine: Annotated[InferenceEngine | None, Depends(engine)] = None):
+    from fastapi.responses import StreamingResponse
+    from src.events import (
+        StepStart, TextStart, TextDelta, TextEnd,
+        ToolCallStarted, ToolResultEvent, StepFinish, Finish,
+        Usage, FinishReason, event_to_sse, chunk_text,
     )
+
+    started = time.perf_counter()
+    prompts = payload.prompts if payload.prompts else [payload.prompt]
+    is_batch = payload.prompts is not None
+    gen_fn, model_name = _resolve_gen_fn(payload, local_engine)
+
+    async def event_stream():
+        yield event_to_sse(StepStart(index=0))
+        text_id = "t0"
+        yield event_to_sse(TextStart(id=text_id))
+
+        if payload.num_agents > 1:
+            modality_ctx = _build_modality_context(payload)
+            from src.agents.orchestrator import multi_agent_generate
+            result = multi_agent_generate(
+                generate_fn=gen_fn, question=payload.prompt or prompts[0],
+                profiles=get_default_profiles()[:payload.num_agents],
+                max_worker_tokens=payload.max_worker_tokens or payload.max_tokens,
+                max_judge_tokens=payload.max_judge_tokens or payload.max_tokens * 2,
+                max_workers=payload.num_agents, modality_context=modality_ctx,
+            )
+            final_text = result.get("final_answer", "")
+            for chunk in chunk_text(final_text, 50):
+                yield event_to_sse(TextDelta(id=text_id, text=chunk))
+            yield event_to_sse(TextEnd(id=text_id))
+            usage = Usage(output_tokens=len(final_text.split()))
+            yield event_to_sse(StepFinish(index=0, reason=FinishReason.STOP, usage=usage))
+            yield event_to_sse(Finish(reason=FinishReason.STOP, usage=usage))
+            return
+
+        question = payload.prompt or prompts[0]
+        if payload.use_tools and not is_batch:
+            executor = ToolExecutor(
+                allowed_roots=[payload.workspace_root] if payload.workspace_root else None
+            )
+            loop = ReActLoop(gen_fn, executor=executor, workspace=payload.workspace_root or ".")
+            react_result = loop.run(question=question, max_tokens=payload.max_tokens * 4, temperature=payload.temperature)
+            final_text = react_result.final_answer
+            for chunk in chunk_text(final_text, 50):
+                yield event_to_sse(TextDelta(id=text_id, text=chunk))
+            yield event_to_sse(TextEnd(id=text_id))
+            usage = Usage(output_tokens=react_result.total_tokens)
+        else:
+            if modality_ctx := _build_modality_context(payload):
+                prompts = [f"{p}\n\n{modality_ctx}" for p in prompts]
+            responses, counts = gen_fn(prompts, payload.max_tokens, payload.temperature, payload.top_p)
+            final_text = responses[0] if not is_batch else "\n".join(responses)
+            for chunk in chunk_text(final_text, 50):
+                yield event_to_sse(TextDelta(id=text_id, text=chunk))
+            yield event_to_sse(TextEnd(id=text_id))
+            usage = Usage(output_tokens=sum(counts))
+
+        yield event_to_sse(StepFinish(index=0, reason=FinishReason.STOP, usage=usage))
+        yield event_to_sse(Finish(reason=FinishReason.STOP, usage=usage))
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.post("/v1/approve", dependencies=[Depends(require_api_key)])
+def approve(payload: ApproveRequest):
+    decision = ApprovalDecision(payload.action)
+    result = _approval_manager.decide(payload.session_id, decision, payload.index)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+# ── Sessions API ─────────────────────────────────────────────────────────
+
+class CreateSessionRequest(BaseModel):
+    agent_id: str = Field(default="default")
+    provider: str = Field(default="local")
+    model: str = Field(default="")
+    metadata: dict | None = Field(default=None)
+
+
+class AppendMessageRequest(BaseModel):
+    role: str = Field(...)
+    content: str | list = Field(...)
+    metadata: dict | None = Field(default=None)
+
+
+@app.post("/v1/sessions", dependencies=[Depends(require_api_key)])
+def create_session(payload: CreateSessionRequest):
+    session = _session_store.create_session(
+        agent_id=payload.agent_id, provider=payload.provider,
+        model=payload.model, metadata=payload.metadata,
+    )
+    return {"session_id": session.id, "status": session.status.value}
+
+
+@app.get("/v1/sessions", dependencies=[Depends(require_api_key)])
+def list_sessions(limit: int = 50, offset: int = 0):
+    sessions = _session_store.list_sessions(limit=limit, offset=offset)
     return {
-        "response": responses[0], "tokens_generated": counts[0],
-        "latency_ms": elapsed * 1000, "throughput_tokens_per_second": throughput,
-        "model": model.model_name,
+        "sessions": [
+            {"id": s.id, "agent_id": s.agent_id, "status": s.status.value,
+             "message_count": len(s.messages), "created_at": s.created_at, "updated_at": s.updated_at}
+            for s in sessions
+        ],
+        "total": len(sessions),
     }
 
 
-@app.post("/v1/generate-batch", dependencies=[Depends(require_api_key)])
-def generate_batch(payload: BatchRequest, model: Annotated[InferenceEngine, Depends(engine)]):
-    responses, counts, elapsed, throughput = run_generation(
-        model, payload.prompts, payload.max_tokens, payload.temperature, payload.top_p,
+@app.get("/v1/sessions/{session_id}", dependencies=[Depends(require_api_key)])
+def get_session(session_id: str):
+    session = _session_store.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {
+        "id": session.id, "agent_id": session.agent_id,
+        "provider": session.provider, "model": session.model,
+        "status": session.status.value, "messages": session.messages,
+        "metadata": session.metadata,
+        "created_at": session.created_at, "updated_at": session.updated_at,
+    }
+
+
+@app.post("/v1/sessions/{session_id}/messages", dependencies=[Depends(require_api_key)])
+def append_message(session_id: str, payload: AppendMessageRequest):
+    session = _session_store.append_message(session_id, payload.role, payload.content, payload.metadata)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"message_count": len(session.messages)}
+
+
+@app.get("/v1/sessions/{session_id}/events", dependencies=[Depends(require_api_key)])
+def get_session_events(session_id: str, after_id: str | None = None):
+    events = _session_store.get_event_stream(session_id, after_id=after_id)
+    return {
+        "events": [
+            {"id": e.id, "type": e.event_type, "data": e.data, "created_at": e.created_at}
+            for e in events
+        ],
+    }
+
+
+@app.post("/v1/sessions/{session_id}/interrupt", dependencies=[Depends(require_api_key)])
+def interrupt_session(session_id: str):
+    ok = _session_store.update_status(session_id, SessionStatus.INTERRUPTED)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"status": "interrupted"}
+
+
+@app.delete("/v1/sessions/{session_id}", dependencies=[Depends(require_api_key)])
+def delete_session(session_id: str):
+    ok = _session_store.delete_session(session_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"status": "deleted"}
+
+
+# ── Agents API ────────────────────────────────────────────────────────────
+
+@app.get("/v1/agents", dependencies=[Depends(require_api_key)])
+def list_agents_endpoint():
+    return {"agents": list_agents()}
+
+
+@app.get("/v1/agents/{agent_id}", dependencies=[Depends(require_api_key)])
+def get_agent_endpoint(agent_id: str):
+    try:
+        agent = get_agent(agent_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return {
+        "id": agent.id, "name": agent.name, "description": agent.description,
+        "temperature": agent.temperature, "tools_enabled": agent.tools_enabled,
+    }
+
+
+# ── Providers API ─────────────────────────────────────────────────────────
+
+@app.get("/v1/providers", dependencies=[Depends(require_api_key)])
+def list_providers():
+    return {
+        "providers": sorted(SUPPORTED_PROVIDERS),
+        "default": "local",
+    }
+
+
+# ── Models API (inferred from providers) ──────────────────────────────────
+
+MODEL_CATALOG = [
+    {"id": "gpt-4o", "provider": "openai", "description": "OpenAI GPT-4o"},
+    {"id": "gpt-4o-mini", "provider": "openai", "description": "OpenAI GPT-4o Mini"},
+    {"id": "claude-3-5-sonnet-20241022", "provider": "anthropic", "description": "Claude 3.5 Sonnet"},
+    {"id": "claude-3-haiku-20240307", "provider": "anthropic", "description": "Claude 3 Haiku"},
+    {"id": "gemini-1.5-pro", "provider": "google", "description": "Gemini 1.5 Pro"},
+    {"id": "gemini-1.5-flash", "provider": "google", "description": "Gemini 1.5 Flash"},
+    {"id": "deepseek-chat", "provider": "deepseek", "description": "DeepSeek Chat"},
+    {"id": "deepseek-coder", "provider": "deepseek", "description": "DeepSeek Coder"},
+    {"id": "local", "provider": "local", "description": "Local model via Transformers"},
+]
+
+
+@app.get("/v1/models", dependencies=[Depends(require_api_key)])
+def list_models(provider: str | None = None):
+    models = MODEL_CATALOG
+    if provider:
+        models = [m for m in models if m["provider"] == provider]
+    return {"models": models}
+
+
+# ── Filesystem API ────────────────────────────────────────────────────────
+
+class ReadFileRequest(BaseModel):
+    path: str = Field(...)
+    offset: int = Field(default=1)
+    limit: int | None = Field(default=None)
+
+
+class WriteFileRequest(BaseModel):
+    path: str = Field(...)
+    content: str = Field(...)
+
+
+class EditFileRequest(BaseModel):
+    path: str = Field(...)
+    old_string: str = Field(...)
+    new_string: str = Field(...)
+
+
+class GrepRequest(BaseModel):
+    pattern: str = Field(...)
+    path: str = Field(default=".")
+
+
+@app.post("/v1/fs/read", dependencies=[Depends(require_api_key)])
+def fs_read(payload: ReadFileRequest):
+    from src.tools import ToolExecutor
+    exec = ToolExecutor()
+    try:
+        content = exec.execute("read_file", {"path": payload.path, "offset": payload.offset, "limit": payload.limit})
+        return {"content": content, "path": payload.path}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/fs/write", dependencies=[Depends(require_api_key)])
+def fs_write(payload: WriteFileRequest):
+    from src.tools import ToolExecutor
+    exec = ToolExecutor()
+    try:
+        result = exec.execute("write_file", {"path": payload.path, "content": payload.content})
+        return {"result": result}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/fs/edit", dependencies=[Depends(require_api_key)])
+def fs_edit(payload: EditFileRequest):
+    from src.tools import ToolExecutor
+    exec = ToolExecutor()
+    try:
+        result = exec.execute("edit_file", {"path": payload.path, "old_string": payload.old_string, "new_string": payload.new_string})
+        return {"result": result}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/v1/fs/ls", dependencies=[Depends(require_api_key)])
+def fs_ls(path: str = "."):
+    from src.tools import ToolExecutor
+    exec = ToolExecutor()
+    try:
+        entries = exec.execute("ls", {"path": path})
+        return {"entries": entries.split("\n") if entries else [], "path": path}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/v1/fs/glob", dependencies=[Depends(require_api_key)])
+def fs_glob(pattern: str, path: str = "."):
+    from src.tools import ToolExecutor
+    exec = ToolExecutor()
+    try:
+        result = exec.execute("glob", {"pattern": pattern, "path": path})
+        return {"files": result.split("\n") if result else []}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/v1/fs/grep", dependencies=[Depends(require_api_key)])
+def fs_grep(payload: GrepRequest):
+    from src.tools import ToolExecutor
+    exec = ToolExecutor()
+    try:
+        result = exec.execute("grep", {"pattern": payload.pattern, "path": payload.path})
+        return {"matches": result.split("\n") if result else []}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+# ── CodeMode API ───────────────────────────────────────────────────────────
+
+class CodeExecuteRequest(BaseModel):
+    code: str = Field(..., max_length=50000)
+    language: str = Field(default="python")
+    timeout: float | None = Field(default=None, ge=1, le=120)
+    stdin: str = Field(default="")
+    env: dict[str, str] | None = Field(default=None)
+    metadata: dict[str, Any] | None = Field(default=None)
+
+
+@app.post("/v1/codemode/execute", dependencies=[Depends(require_api_key)])
+def codemode_execute(payload: CodeExecuteRequest):
+    from src.codemode import CodeExecutor
+    exec = CodeExecutor()
+    result = exec.execute(
+        code=payload.code,
+        language=payload.language,
+        timeout=payload.timeout,
+        stdin=payload.stdin,
+        env=payload.env,
+        metadata=payload.metadata,
     )
     return {
-        "responses": responses, "tokens_generated": sum(counts),
-        "latency_ms": elapsed * 1000, "throughput_tokens_per_second": throughput,
-        "model": model.model_name,
+        "id": result.id,
+        "language": result.language,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "exit_code": result.exit_code,
+        "timed_out": result.timed_out,
+        "duration_ms": result.duration_ms,
+        "errors": result.errors,
     }
+
 
