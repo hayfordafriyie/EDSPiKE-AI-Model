@@ -7,6 +7,8 @@ from typing import Any
 
 import httpx
 
+from .contracts import validate as validate_input
+
 
 class EDSPiKEClient:
     """Client for the EDSPiKE AI Agent API.
