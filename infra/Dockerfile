@@ -6,7 +6,7 @@ RUN pip install --no-cache-dir -r requirements-production.txt
 COPY . .
 
 ENV INFERENCE_BACKEND=vllm \
-    MODEL_PATH=/models/edspike \
+    MODEL_PATH=/models/EDSPiKE \
     MAX_BATCH_SIZE=64
 
 EXPOSE 8000

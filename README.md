@@ -124,7 +124,7 @@ As your business grows and more data accumulates, the model improves automatical
 
 ## GPU production
 
-Mount a compatible model at `./models/edspike`, set `INFERENCE_BACKEND=vllm`, then:
+Mount a compatible model at `./models/EDSPiKE`, set `INFERENCE_BACKEND=vllm`, then:
 
 ```bash
 docker compose -f infra/docker-compose.yml up --build
