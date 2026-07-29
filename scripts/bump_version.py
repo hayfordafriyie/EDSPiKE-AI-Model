@@ -42,9 +42,15 @@ def write_version(new_version: str):
 
 
 def main():
+    if len(sys.argv) >= 3 and sys.argv[1] == "--set":
+        new = sys.argv[2]
+        current = read_version()
+        write_version(new)
+        print(f"{current} -> {new}")
+        return
     part = sys.argv[1] if len(sys.argv) > 1 else "patch"
     if part not in ("major", "minor", "patch"):
-        print(f"Usage: bump_version.py [major|minor|patch]  (default: patch)")
+        print(f"Usage: bump_version.py [--set X.Y.Z | major|minor|patch]  (default: patch)")
         sys.exit(1)
     current = read_version()
     new = bump(current, part)
