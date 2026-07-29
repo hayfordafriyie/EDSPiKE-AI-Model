@@ -7,8 +7,6 @@ import os
 import tempfile
 from typing import Any
 
-import numpy as np
-
 from .vision import describe_image, analyze_image
 
 logger = logging.getLogger(__name__)

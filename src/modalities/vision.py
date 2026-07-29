@@ -6,7 +6,6 @@ import logging
 import os
 from typing import Any
 
-import numpy as np
 from PIL import Image
 
 from .models import get_modality_models

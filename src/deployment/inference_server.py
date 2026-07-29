@@ -125,31 +125,34 @@ def run_generation(model: InferenceEngine, prompts: list[str], max_tokens: int, 
 
 def _build_modality_context(payload: GenerateRequest) -> str:
     context_parts: list[str] = []
-    if not any([payload.images, payload.audio, payload.video]):
+    images = getattr(payload, "images", None)
+    audio = getattr(payload, "audio", None)
+    video = getattr(payload, "video", None)
+    if not any([images, audio, video]):
         return ""
     try:
         from src.modalities import describe_image, transcribe_audio, process_video
     except ImportError:
         logger.warning("modalities module not available")
         return ""
-    if payload.images:
-        for i, img in enumerate(payload.images):
+    if images:
+        for i, img in enumerate(images):
             try:
                 raw = base64.b64decode(img)
                 desc = describe_image(raw)
                 context_parts.append(f"Image {i + 1}: {desc}")
             except Exception:
                 logger.exception("Failed to process image %d", i)
-    if payload.audio:
-        for i, aud in enumerate(payload.audio):
+    if audio:
+        for i, aud in enumerate(audio):
             try:
                 raw = base64.b64decode(aud)
                 text = transcribe_audio(raw)
                 context_parts.append(f"Audio {i + 1} transcription: {text}")
             except Exception:
                 logger.exception("Failed to process audio %d", i)
-    if payload.video:
-        for i, vid in enumerate(payload.video):
+    if video:
+        for i, vid in enumerate(video):
             try:
                 raw = base64.b64decode(vid)
                 analysis = process_video(raw)

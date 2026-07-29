@@ -6,8 +6,6 @@ import logging
 import os
 from typing import Any
 
-import numpy as np
-
 from .models import get_modality_models
 
 logger = logging.getLogger(__name__)
