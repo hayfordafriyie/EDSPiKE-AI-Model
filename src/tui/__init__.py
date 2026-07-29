@@ -55,8 +55,42 @@ def _rich_tui(working_dir: str) -> None:
     tracker.snapshot()
 
     try:
+        from prompt_toolkit.completion import Completer, Completion
+
+        class AtCompleter(Completer):
+            def __init__(self, root_dir: str):
+                self.root_dir = root_dir
+
+            def get_completions(self, document, complete_event):
+                text = document.text_before_cursor
+                if "@" not in text:
+                    return
+                idx = text.rindex("@")
+                prefix = text[idx + 1:]
+
+                # Suggest subagents
+                agents = {
+                    "build": "Full-access development agent",
+                    "plan": "Read-only planning agent",
+                    "explore": "Fast code exploration agent",
+                    "general": "General-purpose agent",
+                }
+                for name, desc in agents.items():
+                    if name.startswith(prefix):
+                        yield Completion(f"@{name}", start_position=-len(prefix) - 1, display=f"@{name}", display_meta=desc)
+
+                # Suggest files
+                root = Path(self.root_dir)
+                for fpath in root.rglob("*"):
+                    if fpath.is_file() and fpath.name.startswith(prefix):
+                        rel = str(fpath.relative_to(root))
+                        yield Completion(f"@{rel}", start_position=-len(prefix) - 1, display=f"@{rel}", display_meta="file")
+
+        completer = AtCompleter(working_dir)
         psession = PromptSession(
             history=FileHistory(str(history_path)),
+            completer=completer,
+            complete_while_typing=True,
         )
     except Exception:
         psession = PromptSession()
