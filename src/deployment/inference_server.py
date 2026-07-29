@@ -17,11 +17,26 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 
 load_dotenv(Path(__file__).parents[2] / ".env")
 
+from pydantic import RootModel
+
+
+class ApproveRequest(BaseModel):
+    session_id: str = Field(..., description="Session ID from /v1/generate")
+    action: str = Field(
+        ...,
+        pattern=r"^(approve_one|approve_all|reject)$",
+        description="'approve_one', 'approve_all', or 'reject'",
+    )
+    index: int | None = Field(default=None, description="Call index for approve_one / reject")
+
 from .engine import InferenceEngine, create_engine
 from .prometheus_metrics import LATENCY, MODEL_READY, REQUESTS, THROUGHPUT, TOKENS
 from src.agents.orchestrator import multi_agent_generate
 from src.agents.worker import AGENT_PROFILES
 from src.tools import ReActLoop, ToolExecutor
+from src.tools.permissions import ApprovalDecision, ApprovalManager
+
+_approval_manager = ApprovalManager()
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +56,7 @@ class GenerateRequest(BaseModel):
     audio: list[str] | None = Field(default=None, description="Base64-encoded audio files or URLs")
     video: list[str] | None = Field(default=None, description="Base64-encoded video files or URLs")
     use_tools: bool = Field(default=False, description="Enable tool-use (ReAct) mode for file ops, bash, etc.")
+    approval_mode: str = Field(default="auto", description="Tool approval: 'auto' (no approval), 'manual' (ask before each tool call)")
     workspace_root: str | None = Field(default=None, description="Root directory for tool operations")
 
     @field_validator("prompt")
@@ -188,6 +204,45 @@ def generate(payload: GenerateRequest, model: Annotated[InferenceEngine, Depends
     if payload.use_tools and not is_batch and payload.prompt:
         exec_roots = [payload.workspace_root] if payload.workspace_root else None
         executor = ToolExecutor(allowed_roots=exec_roots)
+
+        if payload.approval_mode == "manual":
+            from src.tools.registry import get_tool_schemas
+            schemas = get_tool_schemas()
+            descs = "\n\n".join(
+                f"### {s['name']}\n{s['description']}\nJSON Schema: {json.dumps(s['parameters'])}"
+                for s in schemas
+            )
+            system = (
+                f"You are an AI coding agent with access to tools.\n\n"
+                f"## Available Tools\n{descs}\n\n"
+                f"## How to use tools\n"
+                f"When you need to use a tool, output:\n"
+                f'<tool_call>\n{{"name": "tool_name", "arguments": {{...}}}}\n</tool_call>\n\n'
+                f"Workspace: {payload.workspace_root or '.'}\n\nBegin."
+            )
+            messages = [system, f"## Task\n{payload.prompt}"]
+            sid = _approval_manager.create_session(
+                generate_fn=model.generate_batch,
+                executor=executor,
+                messages=messages,
+                max_tokens=payload.max_tokens * 4,
+                temperature=payload.temperature,
+            )
+            result = _approval_manager._run_next_turn(
+                _approval_manager._sessions[sid]
+            )
+            result["model"] = model.model_name
+    return result
+
+
+@app.post("/v1/approve", dependencies=[Depends(require_api_key)])
+def approve(payload: ApproveRequest):
+    decision = ApprovalDecision(payload.action)
+    result = _approval_manager.decide(payload.session_id, decision, payload.index)
+    if "error" in result:
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
         loop = ReActLoop(
             generate_fn=model.generate_batch,
             executor=executor,
