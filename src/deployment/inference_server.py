@@ -51,6 +51,7 @@ class GenerateRequest(BaseModel):
     provider: str = Field(default="local")
     api_key: str | None = Field(default=None)
     model: str | None = Field(default=None)
+    stream: bool = Field(default=False)
 
     @field_validator("prompt")
     @classmethod
@@ -280,6 +281,72 @@ def generate(payload: GenerateRequest, local_engine: Annotated[InferenceEngine |
         result["model"] = model_name
         result["provider"] = payload.provider
     return result
+
+
+@app.post("/v1/generate/stream", dependencies=[Depends(require_api_key)])
+def generate_stream(payload: GenerateRequest, local_engine: Annotated[InferenceEngine | None, Depends(engine)] = None):
+    from fastapi.responses import StreamingResponse
+    from src.events import (
+        StepStart, TextStart, TextDelta, TextEnd,
+        ToolCallStarted, ToolResultEvent, StepFinish, Finish,
+        Usage, FinishReason, event_to_sse, chunk_text,
+    )
+
+    started = time.perf_counter()
+    prompts = payload.prompts if payload.prompts else [payload.prompt]
+    is_batch = payload.prompts is not None
+    gen_fn, model_name = _resolve_gen_fn(payload, local_engine)
+
+    async def event_stream():
+        yield event_to_sse(StepStart(index=0))
+        text_id = "t0"
+        yield event_to_sse(TextStart(id=text_id))
+
+        if payload.num_agents > 1:
+            modality_ctx = _build_modality_context(payload)
+            from src.agents.orchestrator import multi_agent_generate
+            result = multi_agent_generate(
+                generate_fn=gen_fn, question=payload.prompt or prompts[0],
+                profiles=AGENT_PROFILES[:payload.num_agents],
+                max_worker_tokens=payload.max_worker_tokens or payload.max_tokens,
+                max_judge_tokens=payload.max_judge_tokens or payload.max_tokens * 2,
+                max_workers=payload.num_agents, modality_context=modality_ctx,
+            )
+            final_text = result.get("final_answer", "")
+            for chunk in chunk_text(final_text, 50):
+                yield event_to_sse(TextDelta(id=text_id, text=chunk))
+            yield event_to_sse(TextEnd(id=text_id))
+            usage = Usage(output_tokens=len(final_text.split()))
+            yield event_to_sse(StepFinish(index=0, reason=FinishReason.STOP, usage=usage))
+            yield event_to_sse(Finish(reason=FinishReason.STOP, usage=usage))
+            return
+
+        question = payload.prompt or prompts[0]
+        if payload.use_tools and not is_batch:
+            executor = ToolExecutor(
+                allowed_roots=[payload.workspace_root] if payload.workspace_root else None
+            )
+            loop = ReActLoop(gen_fn, executor=executor, workspace=payload.workspace_root or ".")
+            react_result = loop.run(question=question, max_tokens=payload.max_tokens * 4, temperature=payload.temperature)
+            final_text = react_result.final_answer
+            for chunk in chunk_text(final_text, 50):
+                yield event_to_sse(TextDelta(id=text_id, text=chunk))
+            yield event_to_sse(TextEnd(id=text_id))
+            usage = Usage(output_tokens=react_result.total_tokens)
+        else:
+            if modality_ctx := _build_modality_context(payload):
+                prompts = [f"{p}\n\n{modality_ctx}" for p in prompts]
+            responses, counts = gen_fn(prompts, payload.max_tokens, payload.temperature, payload.top_p)
+            final_text = responses[0] if not is_batch else "\n".join(responses)
+            for chunk in chunk_text(final_text, 50):
+                yield event_to_sse(TextDelta(id=text_id, text=chunk))
+            yield event_to_sse(TextEnd(id=text_id))
+            usage = Usage(output_tokens=sum(counts))
+
+        yield event_to_sse(StepFinish(index=0, reason=FinishReason.STOP, usage=usage))
+        yield event_to_sse(Finish(reason=FinishReason.STOP, usage=usage))
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.post("/v1/approve", dependencies=[Depends(require_api_key)])
