@@ -11,7 +11,7 @@ from src.tui import run_tui
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="edspike",
-        description="EDSPiKE AI Model - Terminal AI coding assistant",
+        description="EDSPiKE AI Agent - Terminal AI coding assistant",
     )
     parser.add_argument(
         "prompt", nargs="*",
