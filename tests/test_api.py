@@ -4,6 +4,10 @@ os.environ["SKIP_MODEL_LOAD"] = "true"
 os.environ["EDSPIKE_API_KEY"] = ""
 os.environ["MAX_BATCH_SIZE"] = "64"
 
+import pytest
+pytest.importorskip("fastapi")
+pytest.importorskip("dotenv")
+
 from fastapi.testclient import TestClient
 
 from src.deployment.inference_server import app
