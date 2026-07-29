@@ -27,6 +27,7 @@ BUILTIN_MODES: dict[str, Mode] = {
             "edit_file": "deny",
             "apply_patch": "deny",
             "bash": "ask",
+            "external_directory": "ask",
         },
         agent_id="plan",
     ),
