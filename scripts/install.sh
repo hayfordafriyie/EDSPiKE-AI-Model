@@ -30,7 +30,7 @@ if [ -d "$INSTALL_DIR/.git" ]; then
   git -C "$INSTALL_DIR" pull --ff-only
 else
   echo "==> Cloning repository..."
-  git clone --depth 1 "https://github.com/$REPO.git" "$INSTALL_DIR"
+  GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 --filter=blob:none "https://github.com/$REPO.git" "$INSTALL_DIR"
 fi
 
 # Create virtual environment
