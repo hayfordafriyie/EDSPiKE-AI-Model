@@ -11,7 +11,7 @@ def load_config(path: str | Path = "configs/base_config.yaml") -> dict[str, Any]
         return yaml.safe_load(stream)
 
 
-class EDSPiKEModel:
+class EDSPiKEAgent:
     @staticmethod
     def initialize_llama_style(config_path: str = "configs/base_config.yaml"):
         try:
@@ -79,7 +79,7 @@ class EDSPiKEModel:
                     model_id, device_map=None, trust_remote_code=False, low_cpu_mem_usage=True,
                 )
                 if quantization:
-                    model = EDSPiKEModel._quantize_cpu(model, quantization)
+                    model = EDSPiKEAgent._quantize_cpu(model, quantization)
             return model.to("cpu")
         kwargs: dict[str, Any] = {"device_map": "auto", "trust_remote_code": False}
         if torch.cuda.is_available():

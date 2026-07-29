@@ -165,6 +165,10 @@ class ToolExecutor:
         except Exception as exc:
             return f"[Command failed: {exc}]"
 
+    def _diagnostics(self, file_path: str, language: str = "") -> str:
+        from .diagnostics import run_diagnostics
+        return run_diagnostics(file_path, language)
+
     def parse_tool_call(self, text: str) -> list[dict[str, Any]] | None:
         calls = []
         pattern = r"<tool_call>\s*(\{.*?\})\s*</tool_call>"

@@ -1,4 +1,4 @@
-# EDSPiKE AI Model: Building from Scratch (Industry Standard)
+# EDSPiKE AI Agent: Building from Scratch (Industry Standard)
 
 **Status:** Production Playbook  
 **Target:** Custom LLM for any Business Domain — Continuous Learning from Your Data  
@@ -58,7 +58,7 @@ Git + GitHub
 Docker + docker-compose
 
 # Core directory structure
-EDSPiKE-ai-model/
+EDSPiKE-ai-agent/
 ├── data/
 │   ├── raw/              # Original sources
 │   ├── processed/        # Tokenized, formatted
@@ -449,7 +449,7 @@ import torch
 import torch.nn as nn
 from transformers import AutoConfig, AutoModelForCausalLM
 
-class EDSPiKEModel:
+class EDSPiKEAgent:
     """Initialize or load model for training"""
     
     @staticmethod
@@ -585,7 +585,7 @@ class EDSPiKETrainer:
             gradient_checkpointing=self.config['compute']['gradient_checkpointing'],
             bf16=self.config['compute']['mixed_precision'] == "bf16",
             report_to=["wandb"],
-            run_name="EDSPiKE-model-v1"
+            run_name="EDSPiKE-agent-v1"
         )
         
         # Trainer
@@ -1095,9 +1095,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(
-    title="EDSPiKE AI Model API",
+    title="EDSPiKE AI Agent API",
     description="High-throughput inference API (300+ tokens/second)",
-    version="1.0.0"
+    version="1.0.2"
 )
 
 # Global inference engine
@@ -1338,8 +1338,8 @@ async def health():
 async def root():
     """API documentation"""
     return {
-        "name": "EDSPiKE AI Model API",
-        "version": "1.0.0",
+        "name": "EDSPiKE AI Agent API",
+        "version": "1.0.2",
         "throughput": "300+ tokens/second",
         "model_size": "2.2GB (4-bit quantized)",
         "endpoints": {
@@ -1461,7 +1461,7 @@ pytest-asyncio==0.23.1
 
 ```bash
 # Build image
-docker build -t EDSPiKE-ai-model:v1-production -f infra/Dockerfile .
+docker build -t EDSPiKE-ai-agent:v1-production -f infra/Dockerfile .
 
 # Run with resource constraints
 docker run \
@@ -1473,7 +1473,7 @@ docker run \
   -e MODEL_PATH="checkpoints/gptq-4bit" \
   -e GPU_MEMORY_UTILIZATION="0.9" \
   --name EDSPiKE-api \
-  EDSPiKE-ai-model:v1-production
+  EDSPiKE-ai-agent:v1-production
 
 # Monitor logs
 docker logs -f EDSPiKE-api
@@ -1679,7 +1679,7 @@ python -m src.training.trainer --config_path configs/base_config.yaml
 # MLflow for tracking
 import mlflow
 
-mlflow.set_experiment("EDSPiKE-model-training")
+mlflow.set_experiment("EDSPiKE-agent-training")
 
 with mlflow.start_run():
     mlflow.log_params({
@@ -1879,7 +1879,7 @@ Cost per million tokens: $0.005 (vs $0.30 API)
 **Commands to start NOW:**
 ```bash
 git clone <repo>
-cd EDSPiKE-ai-model
+cd EDSPiKE-ai-agent
 
 # Setup
 python -m venv venv

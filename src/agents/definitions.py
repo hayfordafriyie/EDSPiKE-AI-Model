@@ -14,6 +14,14 @@ class AgentDefinition:
     top_p: float = 0.9
     max_tokens: int = 2048
     tools_enabled: bool = False
+    tool_permissions: dict[str, Any] = field(default_factory=dict)
+    mode: str = "all"  # primary, subagent, all
+    color: str = ""
+    hidden: bool = False
+    steps: int = 0  # 0 = unlimited
+    prompt_file: str = ""
+    task_permissions: dict[str, str] = field(default_factory=dict)
+    model: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -60,6 +68,57 @@ AGENT_DEFINITIONS: dict[str, AgentDefinition] = {
         description="Audio transcription and analysis",
         temperature=0.4,
     ),
+    "explore": AgentDefinition(
+        id="explore", name="Explore",
+        system_prompt="You are a fast, read-only code exploration agent. Search files, grep content, read files, and list directories. NEVER modify files or run commands that could change the system.",
+        description="Fast read-only code exploration",
+        temperature=0.3, tools_enabled=True, mode="subagent",
+        color="cyan",
+        tool_permissions={
+            "read_file": "allow",
+            "grep": "allow",
+            "glob": "allow",
+            "ls": "allow",
+            "diagnostics": "allow",
+            "write_file": "deny",
+            "edit_file": "deny",
+            "bash": "deny",
+        },
+    ),
+    "plan": AgentDefinition(
+        id="plan", name="Plan",
+        system_prompt="You are a planning and analysis agent. Your job is to analyze code, suggest changes, and create plans WITHOUT making modifications. Use read_file, grep, and glob to explore the codebase. Ask before running any bash commands.",
+        description="Read-only planning and analysis",
+        temperature=0.3, tools_enabled=True, mode="primary",
+        color="yellow",
+        tool_permissions={
+            "read_file": "allow",
+            "grep": "allow",
+            "glob": "allow",
+            "ls": "allow",
+            "diagnostics": "allow",
+            "webfetch": "allow",
+            "write_file": "deny",
+            "edit_file": "deny",
+            "apply_patch": "deny",
+            "bash": "ask",
+        },
+    ),
+    "build": AgentDefinition(
+        id="build", name="Build",
+        system_prompt="You are a development agent with full access. Write code, edit files, run commands, and build features. You have unrestricted tool access.",
+        description="Full-access development agent",
+        temperature=0.3, tools_enabled=True, mode="primary",
+        color="green",
+        tool_permissions={},
+    ),
+    "general": AgentDefinition(
+        id="general", name="General",
+        system_prompt="You are a general-purpose agent for researching complex questions and executing multi-step tasks. You have full tool access.",
+        description="General-purpose agent for complex research and multi-step tasks",
+        temperature=0.5, tools_enabled=True, mode="subagent",
+        color="blue",
+    ),
 }
 
 
@@ -74,7 +133,10 @@ def list_agents() -> list[dict[str, Any]]:
     return [
         {
             "id": a.id, "name": a.name, "description": a.description,
-            "temperature": a.temperature, "tools_enabled": a.tools_enabled,
+            "temperature": a.temperature, "top_p": a.top_p,
+            "tools_enabled": a.tools_enabled, "mode": a.mode,
+            "color": a.color, "hidden": a.hidden, "steps": a.steps,
+            "model": a.model,
         }
         for a in AGENT_DEFINITIONS.values()
     ]

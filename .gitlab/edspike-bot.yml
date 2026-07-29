@@ -1,0 +1,26 @@
+# EDSPiKE AI Agent — GitLab Integration
+# Add this to your .gitlab-ci.yml to enable /edspike in merge request comments.
+
+variables:
+  EDSPIKE_API_URL: "https://api.edspike.ai"
+  EDSPIKE_API_KEY: ""  # Set in GitLab CI/CD settings
+
+stages:
+  - edspike
+
+edspike-bot:
+  stage: edspike
+  image: python:3.11
+  only:
+    - merge_requests
+  script:
+    - pip install edspike-ai-agent
+    - |
+      if [ -n "$CI_MERGE_REQUEST_IID" ]; then
+        echo "Running EDSPiKE on MR !$CI_MERGE_REQUEST_IID"
+        # Extract prompt from MR description or a label
+        edspike "Review this merge request for issues" --quiet
+      fi
+  rules:
+    - if: '$CI_MERGE_REQUEST_EVENT_TYPE == "comment"'
+    - if: '$CI_MERGE_REQUEST_DESCRIPTION =~ /\/edspike/'

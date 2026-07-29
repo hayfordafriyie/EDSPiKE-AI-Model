@@ -14,20 +14,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: Prod
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Bump patch version
+      - name: Bump patch version on Prod
         id: bump
         run: |
+          git checkout Prod
           python scripts/bump_version.py patch
           echo "new_version=$(python -c "import re; print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('src/__init__.py').read())[1])")" >> $GITHUB_OUTPUT
 
-      - name: Commit and tag
+      - name: Commit and tag on Prod
         run: |
           git config user.name "EDSPiKE Bot"
           git config user.email "bot@edspike.ai"
@@ -35,3 +35,11 @@ jobs:
           git commit -m "Bump version to ${{ steps.bump.outputs.new_version }}"
           git tag "v${{ steps.bump.outputs.new_version }}"
           git push origin Prod --tags
+
+      - name: Sync version to Staging to prevent merge conflicts
+        run: |
+          git checkout Staging
+          python scripts/bump_version.py --set "${{ steps.bump.outputs.new_version }}"
+          git add -A
+          git commit -m "Sync version to ${{ steps.bump.outputs.new_version }} (match Prod)" || echo "No changes needed"
+          git push origin Staging
