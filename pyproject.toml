@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "edspike-ai-model"
+name = "EDSPiKE-ai-model"
 version = "1.0.0"
 description = "Domain-agnostic LLM platform: data pipeline, training, evaluation, inference and continuous learning for any business"
 requires-python = ">=3.10"
@@ -13,6 +13,7 @@ dependencies = [
   "uvicorn[standard]>=0.27,<1",
   "pydantic>=2.6,<3",
   "prometheus-client>=0.20,<1",
+  "Pillow>=10,<11",
 ]
 
 [project.optional-dependencies]
@@ -24,14 +25,28 @@ ml = [
   "tokenizers>=0.15,<1",
   "numpy>=1.26,<3",
 ]
-test = ["pytest>=8,<9", "httpx>=0.27,<1"]
+modalities = [
+  "torch>=2.1",
+  "transformers>=4.38,<5",
+  "accelerate>=0.27,<2",
+  "Pillow>=10,<11",
+  "soundfile>=0.12,<1",
+  "librosa>=0.10,<1",
+  "torchaudio>=2.1",
+  "opencv-python>=4.9,<5",
+  "requests>=2.31,<3",
+]
+tools = [
+  "gitpython>=3.1,<4",
+]
+test = ["pytest>=8,<9", "pytest-timeout>=2,<3", "httpx>=0.27,<1"]
 
 [project.scripts]
-edspike-data = "src.data_pipeline.cli:main"
-edspike-train = "src.training.trainer:main"
-edspike-evaluate = "src.evaluation.evaluate:main"
-edspike-feedback = "src.continuous_learning.collector:main"
-edspike-retrain = "src.continuous_learning.train:main"
+EDSPiKE-data = "src.data_pipeline.cli:main"
+EDSPiKE-train = "src.training.trainer:main"
+EDSPiKE-evaluate = "src.evaluation.evaluate:main"
+EDSPiKE-feedback = "src.continuous_learning.collector:main"
+EDSPiKE-retrain = "src.continuous_learning.train:main"
 
 [tool.setuptools.packages.find]
 include = ["src*"]

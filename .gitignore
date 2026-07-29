@@ -15,4 +15,4 @@ reports/*
 
 # Model training outputs (not checked in)
 models/*/
-!models/edspike/
+!models/EDSPiKE/

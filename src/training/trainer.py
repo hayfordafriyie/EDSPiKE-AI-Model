@@ -95,6 +95,8 @@ class EDSPiKETrainer:
         use_bf16 = torch.cuda.is_available() and torch.cuda.is_bf16_supported()
         use_fp16 = torch.cuda.is_available() and not use_bf16
         eval_strat = cfg.get("eval_strategy", "steps")
+        if eval_strat is False:
+            eval_strat = "no"
         args = TrainingArguments(
             output_dir=cfg["output_dir"],
             learning_rate=cfg["learning_rate"],

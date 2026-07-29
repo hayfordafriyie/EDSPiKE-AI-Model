@@ -58,7 +58,7 @@ Git + GitHub
 Docker + docker-compose
 
 # Core directory structure
-edspike-ai-model/
+EDSPiKE-ai-model/
 ├── data/
 │   ├── raw/              # Original sources
 │   ├── processed/        # Tokenized, formatted
@@ -585,7 +585,7 @@ class EDSPiKETrainer:
             gradient_checkpointing=self.config['compute']['gradient_checkpointing'],
             bf16=self.config['compute']['mixed_precision'] == "bf16",
             report_to=["wandb"],
-            run_name="edspike-model-v1"
+            run_name="EDSPiKE-model-v1"
         )
         
         # Trainer
@@ -1461,9 +1461,7 @@ pytest-asyncio==0.23.1
 
 ```bash
 # Build image
-docker build -t edspike-ai-model:v1-production \
-  --build-arg CUDA_VERSION=12.1 \
-  .
+docker build -t EDSPiKE-ai-model:v1-production -f infra/Dockerfile .
 
 # Run with resource constraints
 docker run \
@@ -1474,11 +1472,11 @@ docker run \
   -p 8000:8000 \
   -e MODEL_PATH="checkpoints/gptq-4bit" \
   -e GPU_MEMORY_UTILIZATION="0.9" \
-  --name edspike-api \
-  edspike-ai-model:v1-production
+  --name EDSPiKE-api \
+  EDSPiKE-ai-model:v1-production
 
 # Monitor logs
-docker logs -f edspike-api
+docker logs -f EDSPiKE-api
 
 # Test health
 curl http://localhost:8000/health
@@ -1603,29 +1601,29 @@ import time
 
 # Metrics
 request_count = Counter(
-    'edspike_requests_total',
+    'EDSPiKE_requests_total',
     'Total requests',
     ['endpoint']
 )
 
 tokens_generated = Counter(
-    'edspike_tokens_total',
+    'EDSPiKE_tokens_total',
     'Total tokens generated'
 )
 
 latency_histogram = Histogram(
-    'edspike_latency_ms',
+    'EDSPiKE_latency_ms',
     'Request latency in milliseconds',
     buckets=(10, 50, 100, 200, 500, 1000)
 )
 
 throughput_gauge = Gauge(
-    'edspike_throughput_tok_per_sec',
+    'EDSPiKE_throughput_tok_per_sec',
     'Current throughput in tokens/second'
 )
 
 gpu_memory_gauge = Gauge(
-    'edspike_gpu_memory_mb',
+    'EDSPiKE_gpu_memory_mb',
     'GPU memory usage in MB'
 )
 
@@ -1650,7 +1648,7 @@ global:
   scrape_interval: 15s
 
 scrape_configs:
-  - job_name: 'edspike-ai'
+  - job_name: 'EDSPiKE-ai'
     static_configs:
       - targets: ['localhost:8000/metrics']
 ```
@@ -1663,7 +1661,7 @@ scrape_configs:
 
 ```bash
 # Example: Single A100 on GCP Compute Engine
-gcloud compute instances create edspike-training \
+gcloud compute instances create EDSPiKE-training \
   --machine-type=a2-highgpu-1g \
   --image-family=pytorch-latest-gpu \
   --image-project=deeplearning-platform-release \
@@ -1671,7 +1669,7 @@ gcloud compute instances create edspike-training \
   --zone=us-central1-a
 
 # Connect & train
-gcloud compute ssh edspike-training --zone=us-central1-a
+gcloud compute ssh EDSPiKE-training --zone=us-central1-a
 python -m src.training.trainer --config_path configs/base_config.yaml
 ```
 
@@ -1681,7 +1679,7 @@ python -m src.training.trainer --config_path configs/base_config.yaml
 # MLflow for tracking
 import mlflow
 
-mlflow.set_experiment("edspike-model-training")
+mlflow.set_experiment("EDSPiKE-model-training")
 
 with mlflow.start_run():
     mlflow.log_params({
@@ -1832,8 +1830,8 @@ python src/optimization/gptq_quantize.py \
     --output_dir checkpoints/gptq-4bit
 
 # 2. Deploy with vLLM (1 hour)
-docker build -t edspike-api:v1 .
-docker run --gpus all -p 8000:8000 edspike-api:v1
+docker build -t EDSPiKE-api:v1 -f infra/Dockerfile .
+docker run --gpus all -p 8000:8000 EDSPiKE-api:v1
 
 # 3. Test throughput (5 minutes)
 # Run throughput_benchmark.py
@@ -1881,7 +1879,7 @@ Cost per million tokens: $0.005 (vs $0.30 API)
 **Commands to start NOW:**
 ```bash
 git clone <repo>
-cd edspike-ai-model
+cd EDSPiKE-ai-model
 
 # Setup
 python -m venv venv
