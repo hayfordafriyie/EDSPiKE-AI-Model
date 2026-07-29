@@ -140,6 +140,18 @@ BUILTIN_TOOLS: list[ToolSpec] = [
             "required": ["command"],
         },
     ),
+    ToolSpec(
+        name="diagnostics",
+        description="Get LSP diagnostics (errors, warnings) for a file. Returns all issues found by the language server.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "file_path": {"type": "string", "description": "Absolute path to the file to check"},
+                "language": {"type": "string", "description": "Programming language", "default": ""},
+            },
+            "required": ["file_path"],
+        },
+    ),
 ]
 
 

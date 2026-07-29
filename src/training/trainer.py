@@ -4,7 +4,7 @@ import argparse
 import os
 from pathlib import Path
 
-from src.model.architecture import EDSPiKEModel, load_config
+from src.model.architecture import EDSPiKEAgent, load_config
 
 
 def _available_ram_gb() -> float:
@@ -63,7 +63,7 @@ class EDSPiKETrainer:
         tokenizer = AutoTokenizer.from_pretrained(base_model, use_fast=True)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
-        model = EDSPiKEModel.initialize_llama_style(self.config_path) if from_scratch else EDSPiKEModel.load_pretrained(
+        model = EDSPiKEAgent.initialize_llama_style(self.config_path) if from_scratch else EDSPiKEAgent.load_pretrained(
             base_model, device=device,
         )
         files = {

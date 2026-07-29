@@ -1,4 +1,4 @@
-# Contributing to EDSPiKE AI Model
+# Contributing to EDSPiKE AI Agent
 
 ## Branch Strategy
 
